@@ -69,9 +69,11 @@ async def start_cmd(client, message):
     await add_user_log(user.id, user.first_name, user.username)
     
     if is_new:
-        log_id = await get_setting("log")
-        if log_id:
-            try: await client.send_message(log_id, f"🆕 **USER BARU**\n👤 {user.first_name}\n🆔 `{user.id}`\n🔗 @{user.username or '-'}")
+        res = await get_setting("log")
+        if res:
+            try:
+                log_id = int(res) # Pastikan jadi Integer
+                await client.send_message(log_id, f"🆕 **USER BARU**\n👤 {user.first_name}\n🆔 `{user.id}`\n🔗 @{user.username or '-'}")
             except: pass
     
     # Ambil data dari DB
@@ -95,10 +97,12 @@ async def help_cmd(client, message):
 async def help_callback(client, callback_query):
     await callback_query.edit_message_text("📖 Silahkan cek menu bantuan dengan perintah /help di grup atau di sini.")
     
-@app.on_message(filters.group, group=-1)
+@app.on_message(filters.group & ~filters.new_chat_members, group=-1)
 async def auto_log_group(client, message):
     chat, user = message.chat, message.from_user
-    if user: await add_group_log(chat.id, chat.title, user.id, user.first_name)
+    if user:
+        # Cuma simpan ke database biar statistik di tombol Stats lu bener
+        await add_group_log(chat.id, chat.title, user.id, user.first_name)
 
 @app.on_message(filters.command("mulai") & filters.group)
 async def mulai_handler(client, message):
@@ -320,15 +324,17 @@ async def handle_set_settings(client, callback_query):
 
 @app.on_message(filters.new_chat_members)
 async def new_group_log(client, message):
-    me = await client.me
+    me = await client.get_me() # Ganti bagian ini
     for member in message.new_chat_members:
         if member.id == me.id:
             chat = message.chat
             await add_group_log(chat.id, chat.title, message.from_user.id, message.from_user.first_name)
             log_id = await get_setting("log")
             if log_id:
-                try: await client.send_message(log_id, f"➕ **MASUK GRUP BARU**\n📍 {chat.title}\n🆔 `{chat.id}`\n👤 Oleh: {message.from_user.first_name}")
-                except: pass
+                try: 
+                    await client.send_message(log_id, f"➕ **BOT MASUK GRUP BARU**\n📍 {chat.title}\n🆔 `{chat.id}`\n👤 Oleh: {message.from_user.mention}")
+                except Exception as e: 
+                    print(f"Log Error: {e}")
 
 async def main():
     await app.start()
