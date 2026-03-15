@@ -17,8 +17,7 @@ active_games = {}
 
 # --- LOGIC PEMBACA FILE KBBI ---
 def load_kbbi():
-    # Load semua kata dari file lu buat validasi jawaban
-    file_path = "list_10.0.0.txt" # Pastiin file ini di root atau sesuaikan pathnya
+    file_path = "list_10.0.0.txt"
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
             return [line.strip().lower() for line in f.readlines() if line.strip()]
@@ -27,28 +26,18 @@ def load_kbbi():
 ALL_WORDS = load_kbbi()
 
 def generate_pattern_question(length):
-    # Filter kata berdasarkan panjang (Level 1=4, Level 2=5, dst)
     possible_words = [w for w in ALL_WORDS if len(w) == length and " " not in w]
-    
     if not possible_words:
-        # Cari panjang kata terdekat (kebawah) kalau level yang diminta gak ada
         for fallback_len in range(length-1, 3, -1):
             possible_words = [w for w in ALL_WORDS if len(w) == fallback_len and " " not in w]
-            if possible_words: 
-                break
-        
-        # Kalau tetap gak ketemu di file, baru pake cadangan manual
-        if not possible_words: 
-            possible_words = ["buku", "bola", "padi", "mata"] 
+            if possible_words: break
+        if not possible_words: possible_words = ["buku", "bola", "padi", "mata"]
     
     target_word = random.choice(possible_words)
-    # Bikin pola: Huruf pertama + underscore + Huruf terakhir
     first, last = target_word[0].upper(), target_word[-1].upper()
     underscores = " _ " * (len(target_word) - 2)
-    pattern = f"{first}{underscores}{last}"
-    
     return {
-        "pattern": pattern,
+        "pattern": f"{first}{underscores}{last}",
         "length": len(target_word),
         "prefix": first.lower(),
         "suffix": last.lower()
@@ -61,53 +50,34 @@ async def start_cmd(client, message):
     user = message.from_user
     is_new = await add_user_log(user.id, user.first_name, user.username)
     if is_new:
-        log_text = f"🆕 **User Baru!**\n👤 {user.first_name}\n🆔 {user.id}"
-        await client.send_message(ADMIN_ID, log_text)
-
+        await client.send_message(ADMIN_ID, f"🆕 **User Baru!**\n👤 {user.first_name}\n🆔 {user.id}")
+    
     text = "Selamat datang di Bot Bakkata! Tebak kata berdasarkan pola awalan dan akhiran."
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Add to Group", url=f"https://t.me/{client.me.username}?startgroup=true")],
-        [InlineKeyboardButton("Bantuan", callback_data="show_help")]
-    ])
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("Add to Group", url=f"https://t.me/{client.me.username}?startgroup=true")]])
     await message.reply(text, reply_markup=buttons)
 
-@app.on_message(filters.group, group=-1) # group=-1 biar jalan duluan sebelum filter lain
+@app.on_message(filters.group, group=-1)
 async def auto_log_group(client, message):
-    chat = message.chat
-    user = message.from_user
-    if user:
-        await add_group_log(chat.id, chat.title, user.id, user.first_name)
+    chat, user = message.chat, message.from_user
+    if user: await add_group_log(chat.id, chat.title, user.id, user.first_name)
 
 @app.on_message(filters.command("mulai") & filters.group)
 async def mulai_handler(client, message):
     chat_id = message.chat.id
-    if chat_id in active_games:
-        return await message.reply("Lobby masih terbuka atau game sedang jalan!")
+    if chat_id in active_games: return await message.reply("Lobby masih terbuka atau game sedang jalan!")
+    
+    active_games[chat_id] = {"host": message.from_user.id, "players": [message.from_user.id], "status": "lobby"}
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("Join", callback_data="join_game")],[InlineKeyboardButton("Mulai", callback_data="start_match")]])
+    await message.reply(f"🎮 **Lobby Bakkata Dibuka!**\n\nHost: {message.from_user.first_name}\nTotal Player: 1", reply_markup=buttons)
 
-    active_games[chat_id] = {
-        "host": message.from_user.id,
-        "players": [message.from_user.id],
-        "status": "lobby"
-    }
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Join", callback_data="join_game")],
-        [InlineKeyboardButton("Mulai", callback_data="start_match")]
-    ])
-    await message.reply(f"🎮 **Lobby Bakkata Dibuka!**\n\nHost: {message.from_user.first_name}", reply_markup=buttons)
-
-# --- GAME ENGINE (ANSWER CHECKER) ---
-# --- GAME ENGINE (ANSWER CHECKER) ---
+# --- GAME ENGINE ---
 @app.on_message(filters.group & ~filters.command(["mulai", "help", "start", "ganti", "top", "keluar", "gabung", "admin", "stop"]))
 async def bakkata_engine(client, message):
     chat_id = message.chat.id
     user_id = message.from_user.id if message.from_user else None
-    
-    if not user_id or chat_id not in active_games or active_games[chat_id].get("status") != "playing":
-        return
+    if not user_id or chat_id not in active_games or active_games[chat_id].get("status") != "playing": return
     
     game = active_games[chat_id]
-    
-    # Cek apakah ini reply ke pesan bot
     if not message.reply_to_message: return
     me = await client.get_me()
     if message.reply_to_message.from_user.id != me.id: return
@@ -116,119 +86,98 @@ async def bakkata_engine(client, message):
     if not is_airdrop and user_id not in game["players"]: return
 
     input_word = message.text.lower().strip()
-    
-    # LOGIKA BENAR
-    if (len(input_word) == game["length"] and 
-        input_word.startswith(game["prefix"]) and 
-        input_word.endswith(game["suffix"]) and 
-        input_word in ALL_WORDS):
-        
+    if (len(input_word) == game["length"] and input_word.startswith(game["prefix"]) and input_word.endswith(game["suffix"]) and input_word in ALL_WORDS):
         poin = game.get("airdrop_points", 10)
         await update_point(user_id, poin)
         
-        if is_airdrop:
-            del active_games[chat_id]
-            return await message.reply(f"🎉 **AIRDROP DIAMBIL!**\n{message.from_user.mention} menjawab `{input_word.upper()}` (+{poin} pts)")
-
-        # Ambil data user dari DB (Pake pengaman agar tidak NoneType error)
         u_data = await users.find_one({"_id": user_id})
-        
-        if u_data:
-            pts = u_data.get("point", 0)
-        else:
-            pts = poin # Default kalau user baru pertama kali masuk DB
-            
+        pts = u_data.get("point", 0) if u_data else poin
         new_level = (pts // 100) + 1
-        next_len = min(3 + new_level, 15) 
-        soal = generate_pattern_question(next_len)
+        soal = generate_pattern_question(min(3 + new_level, 15))
         
-        game.update({
-            "prefix": soal["prefix"], "suffix": soal["suffix"], 
-            "length": soal["length"], "swapped": False
-        })
+        game.update({"prefix": soal["prefix"], "suffix": soal["suffix"], "length": soal["length"], "swapped": False})
         if "wrong" in game: game["wrong"][user_id] = 0
 
-        await message.reply(
-            f"✅ **BENAR!** ({input_word.upper()})\n"
-            f"👤 Player: {message.from_user.mention}\n"
-            f"📈 Level: {new_level} ({pts} pts)\n\n"
-            f"**NEXT SOAL (Level {new_level}):**\n`{soal['pattern']}` ({soal['length']} Huruf)\n"
-            f"👉 _Reply pesan ini untuk menjawab!_"
-        )
-    
-    # LOGIKA SALAH
+        await message.reply(f"✅ **BENAR!** ({input_word.upper()})\n👤 {message.from_user.mention}\n📈 Level: {new_level} ({pts} pts)\n\n**NEXT:** `{soal['pattern']}` ({soal['length']} Huruf)\n👉 _Reply buat jawab!_")
     else:
         if not is_airdrop:
             await update_point(user_id, -5)
             if "wrong" not in game: game["wrong"] = {}
             game["wrong"][user_id] = game["wrong"].get(user_id, 0) + 1
-            
-            salah_count = game["wrong"][user_id]
-            
-            if salah_count >= 3:
-                if user_id in game["players"]:
-                    game["players"].remove(user_id)
-                game["wrong"][user_id] = 0
-                await message.reply(f"❌ {message.from_user.mention} **KALAH!**\nSalah 3x berturut-turut. Lu dikick dari match!")
+            if game["wrong"][user_id] >= 3:
+                if user_id in game["players"]: game["players"].remove(user_id)
+                await message.reply(f"❌ {message.from_user.mention} **KALAH!** (Salah 3x)")
             else:
-                await message.reply(f"⚠️ {message.from_user.mention} **SALAH!**\nKata tidak valid atau pola salah. (-5 pts)\nKesempatan: {salah_count}/3")
-# --- CALLBACKS ---
-@app.on_callback_query(filters.regex("join_game"))
-async def join_callback(client, callback_query):
-    cid = callback_query.message.chat.id
-    uid = callback_query.from_user.id
-    if cid not in active_games: return
-    if uid in active_games[cid]["players"]:
-        return await callback_query.answer("Udah join!", show_alert=True)
-    active_games[cid]["players"].append(uid)
-    await callback_query.answer("Berhasil join!")
-
-@app.on_callback_query(filters.regex("start_match"))
-async def start_match_callback(client, callback_query):
-    cid = callback_query.message.chat.id
-    if cid not in active_games: return
-    if callback_query.from_user.id != active_games[cid]["host"]:
-        return await callback_query.answer("Cuma host yang bisa!", show_alert=True)
-    
-    soal = generate_pattern_question(4) # Start level easy (4 huruf)
-    active_games[cid].update({
-        "status": "playing",
-        "prefix": soal["prefix"],
-        "suffix": soal["suffix"],
-        "length": soal["length"],
-        "swapped": False
-    })
-    await callback_query.message.edit_text(f"🚀 **Game Dimulai!**\n\nSoal: `{soal['pattern']}`\nJumlah: {soal['length']} Huruf\n\n**Wajib REPLY pesan ini!**")
+                await message.reply(f"⚠️ {message.from_user.mention} **SALAH!** (-5 pts)")
 
 # --- COMMANDS ---
+@app.on_message(filters.command("gabung") & filters.group)
+async def gabung_cmd(client, message):
+    cid, uid = message.chat.id, message.from_user.id
+    if cid not in active_games: return await message.reply("Gak ada game aktif.")
+    if uid in active_games[cid]["players"]: return await message.reply("Udah gabung.")
+    active_games[cid]["players"].append(uid)
+    await message.reply(f"✅ {message.from_user.first_name} bergabung! Total: {len(active_games[cid]['players'])}")
+
+@app.on_message(filters.command("keluar") & filters.group)
+async def keluar_cmd(client, message):
+    cid, uid = message.chat.id, message.from_user.id
+    if cid in active_games and uid in active_games[cid]["players"]:
+        active_games[cid]["players"].remove(uid)
+        await message.reply("👋 Lu keluar.")
+
 @app.on_message(filters.command("ganti") & filters.group)
 async def ganti_cmd(client, message):
     cid = message.chat.id
     if cid not in active_games or active_games[cid].get("status") != "playing": return
-    if active_games[cid].get("swapped"):
-        return await message.reply("Hanya bisa ganti 1x!")
-    
+    if active_games[cid].get("swapped"): return await message.reply("Cuma bisa ganti 1x!")
     soal = generate_pattern_question(active_games[cid]["length"])
-    active_games[cid].update({
-        "prefix": soal["prefix"], "suffix": soal["suffix"], "swapped": True
-    })
+    active_games[cid].update({"prefix": soal["prefix"], "suffix": soal["suffix"], "swapped": True})
     await message.reply(f"🔄 **Soal Diganti!**\n\nBaru: `{soal['pattern']}`")
 
 @app.on_message(filters.command("top"))
 async def top_cmd(client, message):
     top_10 = await users.find().sort("point", -1).limit(10).to_list(10)
-    text = "🏆 **TOP SCORE**\n\n"
+    text = "🏆 **TOP SCORE BAKKATA**\n\n"
     for i, u in enumerate(top_10, 1):
-        text += f"{i}. {u.get('name')} — `{u.get('point')} pts`\n"
-    await message.reply(text)
+        text += f"{i}. {u.get('name', 'User')} — `{u.get('point', 0)} pts`\n"
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("📊 Cek Score Saya", callback_data="my_score")]])
+    await message.reply(text, reply_markup=buttons)
+
+@app.on_message(filters.command("stop") & filters.group)
+async def stop_game(client, message):
+    if message.chat.id in active_games:
+        del active_games[message.chat.id]
+        await message.reply("🛑 Game dihentikan.")
 
 @app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
 async def admin_panel(client, message):
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Broadcast User", callback_data="bc_user"), InlineKeyboardButton("Broadcast Grup", callback_data="bc_group")],
-        [InlineKeyboardButton("🎁 Airdrop Poin", callback_data="setup_airdrop")]
-    ])
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("Broadcast User", callback_data="bc_user"), InlineKeyboardButton("Broadcast Grup", callback_data="bc_group")],[InlineKeyboardButton("🎁 Airdrop Poin", callback_data="setup_airdrop")]])
     await message.reply("🛠 **Admin Panel**", reply_markup=buttons)
+
+# --- CALLBACKS ---
+@app.on_callback_query(filters.regex("my_score"))
+async def my_score_callback(client, callback_query):
+    u = await users.find_one({"_id": callback_query.from_user.id})
+    score = u.get("point", 0) if u else 0
+    await callback_query.answer(f"Skor lu: {score} pts", show_alert=True)
+
+@app.on_callback_query(filters.regex("join_game"))
+async def join_callback(client, callback_query):
+    cid, uid = callback_query.message.chat.id, callback_query.from_user.id
+    if cid not in active_games: return
+    if uid in active_games[cid]["players"]: return await callback_query.answer("Udah join!")
+    active_games[cid]["players"].append(uid)
+    await callback_query.message.edit_text(f"🎮 **Lobby Bakkata Dibuka!**\n\nTotal Player: {len(active_games[cid]['players'])}", 
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Join", callback_data="join_game")],[InlineKeyboardButton("Mulai", callback_data="start_match")]]))
+
+@app.on_callback_query(filters.regex("start_match"))
+async def start_match_cb(client, callback_query):
+    cid = callback_query.message.chat.id
+    if callback_query.from_user.id != active_games[cid]["host"]: return await callback_query.answer("Cuma host!")
+    soal = generate_pattern_question(4)
+    active_games[cid].update({"status": "playing", "prefix": soal["prefix"], "suffix": soal["suffix"], "length": soal["length"]})
+    await callback_query.message.edit_text(f"🚀 **Game Dimulai!**\n\nSoal: `{soal['pattern']}`\nReply buat jawab!")
 
 @app.on_callback_query(filters.regex("setup_airdrop") & filters.user(ADMIN_ID))
 async def airdrop_callback(client, callback_query):
@@ -236,31 +185,10 @@ async def airdrop_callback(client, callback_query):
     all_g = await groups.find().to_list(1000)
     for g in all_g:
         try:
-            cid = g["_id"]
-            active_games[cid] = {
-                "status": "playing", "is_airdrop": True, "airdrop_points": 50,
-                "prefix": soal["prefix"], "suffix": soal["suffix"], "length": soal["length"]
-            }
-            await client.send_message(cid, f"🎁 **AIRDROP 50 POIN!**\n\nSoal: `{soal['pattern']}`\nReply buat ambil!")
+            active_games[g["_id"]] = {"status": "playing", "is_airdrop": True, "airdrop_points": 50, "prefix": soal["prefix"], "suffix": soal["suffix"], "length": soal["length"]}
+            await client.send_message(g["_id"], f"🎁 **AIRDROP 50 POIN!**\n\nSoal: `{soal['pattern']}`\nReply buat ambil!")
         except: continue
     await callback_query.answer("Airdrop disebar!")
 
-@app.on_message(filters.command("stop") & filters.group)
-async def stop_game(client, message):
-    chat_id = message.chat.id
-    if chat_id not in active_games:
-        return await message.reply("Gak ada game yang lagi jalan.")
-    
-    user_id = message.from_user.id if message.from_user else None
-    host_id = active_games[chat_id].get("host")
-    
-    # Cek izin: Cuma Host atau Admin Bot yang bisa matiin
-    if user_id != host_id and user_id != ADMIN_ID:
-        return await message.reply("Cuma Host yang bisa stop game ini!")
-
-    del active_games[chat_id]
-    await message.reply("🛑 **Game dihentikan!** Skor akhir bisa dicek di /top.")
-    
 if __name__ == "__main__":
-    print("Bot Bakkata Running...")
     app.run()
