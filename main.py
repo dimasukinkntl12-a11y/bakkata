@@ -16,6 +16,22 @@ app = Client("bakkata_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 
 active_games = {}
 
+# --- DATABASE SETTINGS HELPERS ---
+async def get_setting(key, default=None):
+    # Mengambil settings dari collection 'settings' di MongoDB
+    res = await app.db.settings.find_one({"_id": key})
+    return res["value"] if res else default
+
+async def set_setting(key, value):
+    # Menyimpan settings ke collection 'settings'
+    await app.db.settings.update_one({"_id": key}, {"$set": {"value": value}}, upsert=True)
+
+# Inisialisasi akses database ke client (tambahkan ini agar app punya akses db)
+@app.on_start
+async def init_db(client):
+    from database import db # Pastikan variabel 'db' di database.py bisa diakses
+    client.db = db
+
 # --- LOGIC PEMBACA FILE KBBI ---
 def load_kbbi():
     file_path = "list_10.0.0.txt"
@@ -65,22 +81,6 @@ async def start_cmd(client, message):
 @app.on_message(filters.command("help"))
 async def help_cmd(client, message):
     help_text = await get_setting("help", "📖 **CARA MAIN BAKKATA**\n\nKetik /mulai di grup.")
-    await message.reply(help_text)
-
-@app.on_message(filters.command("help"))
-async def help_cmd(client, message):
-    help_text = (
-        "📖 **CARA MAIN BAKKATA**\n\n"
-        "1. Tambahin bot ke grup.\n"
-        "2. Ketik `/mulai` buat buka lobby.\n"
-        "3. Klik **Join** atau ketik `/gabung`.\n"
-        "4. Host klik **Mulai**.\n"
-        "5. Jawab dengan cara **REPLY** pesan soal dari bot.\n\n"
-        "💰 **SISTEM POIN:**\n"
-        "- Benar: +10 poin\n"
-        "- Salah: -5 poin\n"
-        "- Salah 3x berturut-turut: Kick dari match!"
-    )
     await message.reply(help_text)
 
 @app.on_callback_query(filters.regex("show_help"))
