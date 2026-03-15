@@ -96,17 +96,21 @@ async def mulai_handler(client, message):
     await message.reply(f"🎮 **Lobby Bakkata Dibuka!**\n\nHost: {message.from_user.first_name}", reply_markup=buttons)
 
 # --- GAME ENGINE (ANSWER CHECKER) ---
-@app.on_message(filters.group & ~filters.command(["mulai", "help", "start", "ganti", "top", "keluar", "gabung", "admin"]))
+# --- GAME ENGINE (ANSWER CHECKER) ---
+@app.on_message(filters.group & ~filters.command(["mulai", "help", "start", "ganti", "top", "keluar", "gabung", "admin", "stop"]))
 async def bakkata_engine(client, message):
     chat_id = message.chat.id
-    user_id = message.from_user.id
+    user_id = message.from_user.id if message.from_user else None
     
-    if chat_id not in active_games or active_games[chat_id].get("status") != "playing":
+    if not user_id or chat_id not in active_games or active_games[chat_id].get("status") != "playing":
         return
+    
     game = active_games[chat_id]
     
+    # Cek apakah ini reply ke pesan bot
     if not message.reply_to_message: return
-    if message.reply_to_message.from_user.id != (await client.get_me()).id: return
+    me = await client.get_me()
+    if message.reply_to_message.from_user.id != me.id: return
 
     is_airdrop = game.get("is_airdrop", False)
     if not is_airdrop and user_id not in game["players"]: return
@@ -120,18 +124,20 @@ async def bakkata_engine(client, message):
         input_word in ALL_WORDS):
         
         poin = game.get("airdrop_points", 10)
-        await update_point(user_id, poin) # Cukup satu kali aja manggil ini
+        await update_point(user_id, poin)
         
         if is_airdrop:
             del active_games[chat_id]
             return await message.reply(f"🎉 **AIRDROP DIAMBIL!**\n{message.from_user.mention} menjawab `{input_word.upper()}` (+{poin} pts)")
 
-        # Ambil data buat Leveling
+        # Ambil data user dari DB (Pake pengaman agar tidak NoneType error)
         u_data = await users.find_one({"_id": user_id})
-        pts = u_data.get("point", 0)
         
-        # LOGIKA NAIK LEVEL: 
-        # Butuh 10x jawab bener (100 poin) buat nambah 1 huruf di soal berikutnya
+        if u_data:
+            pts = u_data.get("point", 0)
+        else:
+            pts = poin # Default kalau user baru pertama kali masuk DB
+            
         new_level = (pts // 100) + 1
         next_len = min(3 + new_level, 15) 
         soal = generate_pattern_question(next_len)
@@ -147,20 +153,21 @@ async def bakkata_engine(client, message):
             f"👤 Player: {message.from_user.mention}\n"
             f"📈 Level: {new_level} ({pts} pts)\n\n"
             f"**NEXT SOAL (Level {new_level}):**\n`{soal['pattern']}` ({soal['length']} Huruf)\n"
-            f"👉 _Wajib reply pesan ini untuk lanjut!_"
+            f"👉 _Reply pesan ini untuk menjawab!_"
         )
     
     # LOGIKA SALAH
     else:
         if not is_airdrop:
-            await update_point(user_id, -5) # Potong poin
+            await update_point(user_id, -5)
             if "wrong" not in game: game["wrong"] = {}
             game["wrong"][user_id] = game["wrong"].get(user_id, 0) + 1
             
             salah_count = game["wrong"][user_id]
             
             if salah_count >= 3:
-                game["players"].remove(user_id)
+                if user_id in game["players"]:
+                    game["players"].remove(user_id)
                 game["wrong"][user_id] = 0
                 await message.reply(f"❌ {message.from_user.mention} **KALAH!**\nSalah 3x berturut-turut. Lu dikick dari match!")
             else:
