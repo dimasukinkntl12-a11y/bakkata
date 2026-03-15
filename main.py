@@ -64,7 +64,15 @@ def generate_pattern_question(length):
 @app.on_message(filters.command("start") & filters.private)
 async def start_cmd(client, message):
     user = message.from_user
+    # Cek user baru buat notif log
+    is_new = await users.find_one({"_id": user.id}) is None
     await add_user_log(user.id, user.first_name, user.username)
+    
+    if is_new:
+        log_id = await get_setting("log")
+        if log_id:
+            try: await client.send_message(log_id, f"🆕 **USER BARU**\n👤 {user.first_name}\n🆔 `{user.id}`\n🔗 @{user.username or '-'}")
+            except: pass
     
     # Ambil data dari DB
     text = await get_setting("start", "🎮 **Bot Bakkata**\n\nGame tebak kata seru!")
@@ -102,7 +110,6 @@ async def mulai_handler(client, message):
     await message.reply(f"🎮 **Lobby Bakkata Dibuka!**\n\nHost: {message.from_user.first_name}\nTotal Player: 1", reply_markup=buttons)
 
 # --- GAME ENGINE ---
-@app.on_message(filters.group & ~filters.command(["mulai", "help", "start", "ganti", "top", "keluar", "gabung", "admin", "stop"]))
 @app.on_message(filters.group & ~filters.command(["mulai", "help", "start", "ganti", "top", "keluar", "gabung", "admin", "stop"]))
 async def bakkata_engine(client, message):
     chat_id = message.chat.id
@@ -200,11 +207,11 @@ async def auto_log_group(client, message):
 @app.on_message(filters.command("admin") & filters.user(ADMIN_ID))
 async def admin_panel(client, message):
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📢 Broadcast User", callback_data="bc_user"), InlineKeyboardButton("👥 Broadcast Grup", callback_data="bc_group")],
-        [InlineKeyboardButton("🎁 Airdrop", callback_data="setup_airdrop"), InlineKeyboardButton("⚙️ Settings", callback_data="bot_settings")]
+        [InlineKeyboardButton("📊 Stats", callback_data="bot_stats"), InlineKeyboardButton("⚙️ Settings", callback_data="bot_settings")],
+        [InlineKeyboardButton("📢 BC User", callback_data="bc_user"), InlineKeyboardButton("👥 BC Grup", callback_data="bc_group")],
+        [InlineKeyboardButton("🎁 Airdrop", callback_data="setup_airdrop")]
     ])
     await message.reply("🛠 **Admin Panel Bakkata**", reply_markup=buttons)
-
 # --- CALLBACKS ---
 @app.on_callback_query(filters.regex("my_score"))
 async def my_score_callback(client, callback_query):
@@ -239,6 +246,26 @@ async def airdrop_callback(client, callback_query):
             await client.send_message(g["_id"], f"🎁 **AIRDROP 50 POIN!**\n\nSoal: `{soal['pattern']}`\nReply buat ambil!")
         except: continue
     await callback_query.answer("Airdrop disebar!")
+
+@app.on_callback_query(filters.regex("bot_stats") & filters.user(ADMIN_ID))
+async def stats_callback(client, callback_query):
+    total_users = await users.count_documents({})
+    total_groups = await groups.count_documents({})
+    
+    stat_text = (
+        f"📊 **STATISTIK BOT**\n\n"
+        f"👤 Total User: `{total_users}`\n"
+        f"👥 Total Grup: `{total_groups}`"
+    )
+    await callback_query.message.edit_text(
+        stat_text, 
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_admin")]])
+    )
+
+@app.on_callback_query(filters.regex("back_to_admin") & filters.user(ADMIN_ID))
+async def back_to_admin(client, callback_query):
+    # Panggil lagi fungsi admin_panel biar balik ke menu awal
+    await admin_panel(client, callback_query.message)
 
 @app.on_callback_query(filters.regex(r"^bc_(user|group)") & filters.user(ADMIN_ID))
 async def broadcast_handler(client, callback_query):
@@ -290,6 +317,18 @@ async def handle_set_settings(client, callback_query):
         
     await set_setting(key, val)
     await ask.reply(f"✅ Berhasil update setting: **{key}**!")
+
+@app.on_message(filters.new_chat_members)
+async def new_group_log(client, message):
+    me = await client.me
+    for member in message.new_chat_members:
+        if member.id == me.id:
+            chat = message.chat
+            await add_group_log(chat.id, chat.title, message.from_user.id, message.from_user.first_name)
+            log_id = await get_setting("log")
+            if log_id:
+                try: await client.send_message(log_id, f"➕ **MASUK GRUP BARU**\n📍 {chat.title}\n🆔 `{chat.id}`\n👤 Oleh: {message.from_user.first_name}")
+                except: pass
 
 async def main():
     await app.start()
