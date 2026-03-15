@@ -29,12 +29,20 @@ ALL_WORDS = load_kbbi()
 def generate_pattern_question(length):
     # Filter kata berdasarkan panjang (Level 1=4, Level 2=5, dst)
     possible_words = [w for w in ALL_WORDS if len(w) == length and " " not in w]
+    
     if not possible_words:
-        possible_words = [w for w in ALL_WORDS if len(w) == 4] # Fallback
+        # Cari panjang kata terdekat (kebawah) kalau level yang diminta gak ada
+        for fallback_len in range(length-1, 3, -1):
+            possible_words = [w for w in ALL_WORDS if len(w) == fallback_len and " " not in w]
+            if possible_words: 
+                break
+        
+        # Kalau tetap gak ketemu di file, baru pake cadangan manual
+        if not possible_words: 
+            possible_words = ["buku", "bola", "padi", "mata"] 
     
     target_word = random.choice(possible_words)
     # Bikin pola: Huruf pertama + underscore + Huruf terakhir
-    # Contoh: "makan" -> "M _ _ _ N"
     first, last = target_word[0].upper(), target_word[-1].upper()
     underscores = " _ " * (len(target_word) - 2)
     pattern = f"{first}{underscores}{last}"
@@ -63,6 +71,13 @@ async def start_cmd(client, message):
     ])
     await message.reply(text, reply_markup=buttons)
 
+@app.on_message(filters.group, group=-1) # group=-1 biar jalan duluan sebelum filter lain
+async def auto_log_group(client, message):
+    chat = message.chat
+    user = message.from_user
+    if user:
+        await add_group_log(chat.id, chat.title, user.id, user.first_name)
+
 @app.on_message(filters.command("mulai") & filters.group)
 async def mulai_handler(client, message):
     chat_id = message.chat.id
@@ -88,28 +103,17 @@ async def bakkata_engine(client, message):
     
     if chat_id not in active_games or active_games[chat_id].get("status") != "playing":
         return
-
     game = active_games[chat_id]
     
-    # WAJIB REPLY (Supaya bisa diskusi sesuai request lu)
-    if not message.reply_to_message:
-        return
-
-    # Cek apakah reply ke pesan soal dari bot
-    if message.reply_to_message.from_user.id != (await client.get_me()).id:
-        return
+    if not message.reply_to_message: return
+    if message.reply_to_message.from_user.id != (await client.get_me()).id: return
 
     is_airdrop = game.get("is_airdrop", False)
-    if not is_airdrop and user_id not in game["players"]:
-        return
+    if not is_airdrop and user_id not in game["players"]: return
 
     input_word = message.text.lower().strip()
     
-    # LOGIKA VALIDASI:
-    # 1. Panjang kata sama?
-    # 2. Awalan sama?
-    # 3. Akhiran sama?
-    # 4. Ada di KBBI?
+    # LOGIKA BENAR
     if (len(input_word) == game["length"] and 
         input_word.startswith(game["prefix"]) and 
         input_word.endswith(game["suffix"]) and 
@@ -120,34 +124,45 @@ async def bakkata_engine(client, message):
         
         if is_airdrop:
             del active_games[chat_id]
-            return await message.reply(f"🎉 **AIRDROP DIAMBIL!**\n{message.from_user.first_name} menjawab `{input_word.upper()}` (+{poin} pts)")
+            return await message.reply(f"🎉 **AIRDROP DIAMBIL!**\n{message.from_user.mention} menjawab `{input_word.upper()}` (+{poin} pts)")
 
-        # Game Biasa: Naik Level
+        # AMBIL DATA BARU BUAT LEVELING
         u_data = await users.find_one({"_id": user_id})
-        points_now = u_data.get("point", 0)
-        new_level = (points_now // 100) + 1
+        pts = u_data.get("point", 0)
+        new_level = (pts // 100) + 1
         
-        # Level Easy = 4 huruf, Level 2 = 5 huruf, dst
-        next_len = 3 + new_level 
+        # Leveling: Max level dibatasi panjang kata di KBBI (misal max 15 huruf)
+        next_len = min(3 + new_level, 15) 
         soal = generate_pattern_question(next_len)
         
         game.update({
-            "prefix": soal["prefix"],
-            "suffix": soal["suffix"],
-            "length": soal["length"],
-            "swapped": False
+            "prefix": soal["prefix"], "suffix": soal["suffix"], 
+            "length": soal["length"], "swapped": False
         })
+        if "wrong" in game: game["wrong"][user_id] = 0 # Reset salah pas bener
 
-        await message.reply(f"✅ **BENAR!** Katanya: `{input_word.upper()}`\nLevel Lu: {new_level}\n\n**SOAL BERIKUTNYA:**\n`{soal['pattern']}` ({soal['length']} Huruf)")
+        await message.reply(
+            f"✅ **BENAR!** ({input_word.upper()})\n"
+            f"👤 Player: {message.from_user.mention}\n"
+            f"📈 Level: {new_level} ({pts} pts)\n\n"
+            f"**NEXT SOAL:**\n`{soal['pattern']}` ({soal['length']} Huruf)"
+        )
+    
+    # LOGIKA SALAH
     else:
-        # Salah/Tidak valid
         if not is_airdrop:
+            await update_point(user_id, -5) # Potong poin
             if "wrong" not in game: game["wrong"] = {}
             game["wrong"][user_id] = game["wrong"].get(user_id, 0) + 1
-            if game["wrong"][user_id] >= 3:
+            
+            salah_count = game["wrong"][user_id]
+            
+            if salah_count >= 3:
                 game["players"].remove(user_id)
-                await message.reply(f"❌ {message.from_user.first_name} salah 3x dan diskualifikasi!")
-
+                game["wrong"][user_id] = 0
+                await message.reply(f"❌ {message.from_user.mention} **KALAH!**\nSalah 3x berturut-turut. Lu dikick dari match!")
+            else:
+                await message.reply(f"⚠️ {message.from_user.mention} **SALAH!**\nKata tidak valid atau pola salah. (-5 pts)\nKesempatan: {salah_count}/3")
 # --- CALLBACKS ---
 @app.on_callback_query(filters.regex("join_game"))
 async def join_callback(client, callback_query):
