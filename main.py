@@ -120,18 +120,19 @@ async def bakkata_engine(client, message):
         input_word in ALL_WORDS):
         
         poin = game.get("airdrop_points", 10)
-        await update_point(user_id, poin)
+        await update_point(user_id, poin) # Cukup satu kali aja manggil ini
         
         if is_airdrop:
             del active_games[chat_id]
             return await message.reply(f"🎉 **AIRDROP DIAMBIL!**\n{message.from_user.mention} menjawab `{input_word.upper()}` (+{poin} pts)")
 
-        # AMBIL DATA BARU BUAT LEVELING
+        # Ambil data buat Leveling
         u_data = await users.find_one({"_id": user_id})
         pts = u_data.get("point", 0)
-        new_level = (pts // 100) + 1
         
-        # Leveling: Max level dibatasi panjang kata di KBBI (misal max 15 huruf)
+        # LOGIKA NAIK LEVEL: 
+        # Butuh 10x jawab bener (100 poin) buat nambah 1 huruf di soal berikutnya
+        new_level = (pts // 100) + 1
         next_len = min(3 + new_level, 15) 
         soal = generate_pattern_question(next_len)
         
@@ -139,13 +140,14 @@ async def bakkata_engine(client, message):
             "prefix": soal["prefix"], "suffix": soal["suffix"], 
             "length": soal["length"], "swapped": False
         })
-        if "wrong" in game: game["wrong"][user_id] = 0 # Reset salah pas bener
+        if "wrong" in game: game["wrong"][user_id] = 0
 
         await message.reply(
             f"✅ **BENAR!** ({input_word.upper()})\n"
             f"👤 Player: {message.from_user.mention}\n"
             f"📈 Level: {new_level} ({pts} pts)\n\n"
-            f"**NEXT SOAL:**\n`{soal['pattern']}` ({soal['length']} Huruf)"
+            f"**NEXT SOAL (Level {new_level}):**\n`{soal['pattern']}` ({soal['length']} Huruf)\n"
+            f"👉 _Wajib reply pesan ini untuk lanjut!_"
         )
     
     # LOGIKA SALAH
@@ -236,6 +238,22 @@ async def airdrop_callback(client, callback_query):
         except: continue
     await callback_query.answer("Airdrop disebar!")
 
+@app.on_message(filters.command("stop") & filters.group)
+async def stop_game(client, message):
+    chat_id = message.chat.id
+    if chat_id not in active_games:
+        return await message.reply("Gak ada game yang lagi jalan.")
+    
+    user_id = message.from_user.id if message.from_user else None
+    host_id = active_games[chat_id].get("host")
+    
+    # Cek izin: Cuma Host atau Admin Bot yang bisa matiin
+    if user_id != host_id and user_id != ADMIN_ID:
+        return await message.reply("Cuma Host yang bisa stop game ini!")
+
+    del active_games[chat_id]
+    await message.reply("🛑 **Game dihentikan!** Skor akhir bisa dicek di /top.")
+    
 if __name__ == "__main__":
     print("Bot Bakkata Running...")
     app.run()
