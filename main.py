@@ -16,18 +16,18 @@ app = Client("bakkata_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 
 active_games = {}
 
-# --- DATABASE SETTINGS HELPERS ---
+# --- DATABASE SETTINGS HELPERS --
 async def get_setting(key, default=None):
-    # Mengambil settings dari collection 'settings' di MongoDB
-    res = await app.db.settings.find_one({"_id": key})
+    # Langsung panggil db dari database.py
+    from database import db
+    res = await db.settings.find_one({"_id": key})
     return res["value"] if res else default
 
 async def set_setting(key, value):
-    # Menyimpan settings ke collection 'settings'
-    await app.db.settings.update_one({"_id": key}, {"$set": {"value": value}}, upsert=True)
-
+    from database import db
+    await db.settings.update_one({"_id": key}, {"$set": {"value": value}}, upsert=True)
+    
 # Inisialisasi akses database ke client (tambahkan ini agar app punya akses db)
-@app.on_start
 async def init_db(client):
     from database import db # Pastikan variabel 'db' di database.py bisa diakses
     client.db = db
@@ -291,5 +291,17 @@ async def handle_set_settings(client, callback_query):
     await set_setting(key, val)
     await ask.reply(f"✅ Berhasil update setting: **{key}**!")
 
+async def main():
+    await app.start()
+    
+    # Panggil db dari database.py dan pasang ke client
+    from database import db
+    app.db = db
+    
+    print(">>> BOT BAKKATA BERHASIL NYALA! <<<")
+    from pyrogram import idle
+    await idle()
+    await app.stop()
+
 if __name__ == "__main__":
-    app.run()
+    app.run(main())
