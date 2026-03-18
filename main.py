@@ -236,7 +236,8 @@ async def bakkata_engine(client, message):
     is_airdrop = game.get("is_airdrop", False)
     is_bet = game.get("is_bet", False) # Cek apakah ini mode taruhan
 
-    # Validasi jawaban
+    if not message.text:
+        return
     input_word = message.text.lower().strip()
     
     # Syarat jawab: 
@@ -486,7 +487,7 @@ async def back_to_top_callback(client, callback_query):
     )
     
 @app.on_callback_query(filters.regex(r"^(join_suit|pilih_suit_)"))
-async def suit_callback(client, callback_query):
+async def handle_suit_system(client, callback_query):
     data = callback_query.data
     cid = callback_query.message.chat.id
     uid = callback_query.from_user.id
@@ -506,42 +507,62 @@ async def suit_callback(client, callback_query):
         game["players"].append(uid)
         game["status"] = "playing"
         
-        # Langsung ganti tampilan jadi menu pilih
-        buttons = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✊ Batu", callback_data="pilih_suit_batu"),
-                InlineKeyboardButton("🖐 Kertas", callback_data="pilih_suit_kertas"),
-                InlineKeyboardButton("✌️ Gunting", callback_data="pilih_suit_gunting")
-            ]
-        ])
-        await callback_query.message.edit_text(
-            f"🚀 Game Dimulai!\n\n"
-            f"Pemain: {len(game['players'])}/2\n"
-            "Silahkan pilih di bawah ini!",
+        buttons = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✊ Batu", callback_data="pilih_suit_batu"),
+            InlineKeyboardButton("🖐 Kertas", callback_data="pilih_suit_kertas"),
+            InlineKeyboardButton("✌️ Gunting", callback_data="pilih_suit_gunting")
+        ]])
+        return await callback_query.message.edit_text(
+            f"🚀 Game Dimulai!\nPemain: {len(game['players'])}/2\nSilahkan pilih!",
             reply_markup=buttons
         )
 
-    # --- LOGIC PILIH ---
-    elif data.startswith("pilih_suit_"):
+    # --- LOGIC PILIH & ADU ---
+    if data.startswith("pilih_suit_"):
         if uid not in game["players"]:
             return await callback_query.answer("Lu bukan pemain!", show_alert=True)
+        if uid in game.get("choices", {}):
+            return await callback_query.answer("Sabar, nunggu lawan!", show_alert=True)
         
-        if uid in game["choices"]:
-            return await callback_query.answer("Lu udah milih, tunggu lawan!", show_alert=True)
-        
-        pilihan = data.split("_")[2]
+        if "choices" not in game: game["choices"] = {}
+        pilihan = data.replace("pilih_suit_", "")
         game["choices"][uid] = pilihan
-        await callback_query.answer(f"Lu milih {pilihan.upper()}!", show_alert=True)
+        await callback_query.answer(f"Lu pilih {pilihan.upper()}!")
 
-        # Kalau dua-duanya udah milih, tentukan pemenang
         if len(game["choices"]) == 2:
-            p1_id, p2_id = game["players"]
-            p1_choice = game["choices"][p1_id]
-            p2_choice = game["choices"][p2_id]
+            p1, p2 = game["players"]
+            move1, move2 = game["choices"][p1], game["choices"][p2]
             
-            # Ambil mention nama
-            p1_name = (await client.get_users(p1_id)).first_name
-            p2_name = (await client.get_users(p2_id)).first_name
+            # Cek Seri
+            if move1 == move2:
+                game["choices"] = {} # Reset biar milih ulang
+                return await callback_query.message.edit_text(
+                    f"🤝 **HASIL SERI!** ({move1.upper()} vs {move2.upper()})\nSilahkan pilih lagi!",
+                    reply_markup=callback_query.message.reply_markup
+                )
+
+            # Tentukan Menang/Kalah
+            rules = {"batu": "gunting", "kertas": "batu", "gunting": "kertas"}
+            if rules[move1] == move2:
+                winner, loser = p1, p2
+            else:
+                winner, loser = p2, p1
+
+            bet = game.get("bet_amount", 0)
+            is_bet = game.get("is_bet", False)
+            win_u = await client.get_users(winner)
+            lose_u = await client.get_users(loser)
+
+            if is_bet:
+                await update_point(winner, bet)
+                await update_point(loser, -bet)
+                res = f"🎉 **{win_u.mention} MENANG TARUHAN!**\n💰 Hadiah: `+{bet}` pts\n📉 {lose_u.mention}: `-{bet}` pts"
+            else:
+                await update_point(winner, 10)
+                res = f"🎉 **{win_u.mention} Menang!**\n🎮 `{game['choices'][winner].upper()}` vs `{game['choices'][loser].upper()}`\n(+10 pts)"
+
+            del active_games[cid]
+            await callback_query.message.edit_text(res)
 
 @app.on_callback_query(filters.regex("join_game"))
 async def join_callback(client, callback_query):
@@ -968,71 +989,6 @@ async def join_bet_callback(client, callback_query):
             f"🚀 **TARUHAN MULAI!**\nLawan: {callback_query.from_user.mention}\n\n"
             f"Soal (4 Huruf): `{soal['pattern']}`\nReply buat jawab!"
         )
-
-@app.on_callback_query(filters.regex(r"^pilih_suit_"))
-async def handle_pilihan_suit(client, callback_query):
-    cid = callback_query.message.chat.id
-    uid = callback_query.from_user.id
-    
-    if cid not in active_games or uid not in active_games[cid]["players"]:
-        return await callback_query.answer("Lu gak ikutan main/taruhan ini!", show_alert=True)
-    
-    game = active_games[cid]
-    pilihan = callback_query.data.replace("pilih_suit_", "")
-    
-    if uid in game.get("choices", {}):
-        return await callback_query.answer("Sabar, nunggu lawan milih!", show_alert=True)
-    
-    if "choices" not in game: game["choices"] = {}
-    game["choices"][uid] = pilihan
-    await callback_query.answer(f"Lu pilih {pilihan.upper()}!")
-
-    if len(game["choices"]) == 2:
-        p1, p2 = game["players"]
-        move1, move2 = game["choices"][p1], game["choices"][p2]
-        
-        # 1. CEK KONDISI SERI DULU
-        if move1 == move2:
-            game["choices"] = {} # Reset pilihan biar bisa milih lagi
-            return await callback_query.message.edit_text(
-                f"🤝 **HASIL SERI!** ({move1.upper()} vs {move2.upper()})\n\n"
-                "Poin aman. Silahkan pilih lagi di bawah!",
-                reply_markup=callback_query.message.reply_markup
-            )
-
-        # 2. TENTUKAN PEMENANG (Kalo gak seri)
-        if (move1 == "batu" and move2 == "gunting") or \
-           (move1 == "gunting" and move2 == "kertas") or \
-           (move1 == "kertas" and move2 == "batu"):
-            winner, loser = p1, p2
-        else:
-            winner, loser = p2, p1
-
-        bet = game.get("bet_amount", 0)
-        is_bet = game.get("is_bet", False)
-        
-        win_user = await client.get_users(winner)
-        lose_user = await client.get_users(loser)
-
-        if is_bet:
-            await update_point(winner, bet)    
-            await update_point(loser, -bet)   
-            res_text = (
-                f"🎉 **{win_user.mention} MENANG TARUHAN!**\n"
-                f"🎮 `{game['choices'][winner].upper()}` vs `{game['choices'][loser].upper()}`\n\n"
-                f"💰 Hadiah: `+{bet}` pts\n"
-                f"📉 {lose_user.mention}: `-{bet}` pts"
-            )
-        else:
-            await update_point(winner, 10)     
-            res_text = (
-                f"🎉 **{win_user.mention} Menang!**\n"
-                f"🎮 `{game['choices'][winner].upper()}` vs `{game['choices'][loser].upper()}`\n"
-                f"(+10 pts)"
-            )
-
-        del active_games[cid]
-        await callback_query.message.edit_text(res_text)
         
 async def main():
     await app.start()
