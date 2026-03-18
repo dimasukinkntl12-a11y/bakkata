@@ -228,44 +228,69 @@ async def taruhan_handler(client, message):
 # --- GAME ENGINE ---
 @app.on_message(filters.group & ~filters.command(["main", "bantuan", "start", "ganti", "top", "taruhan", "keluar", "masuk", "admin", "stop"]))
 async def bakkata_engine(client, message):
+async def bakkata_engine(client, message):
     chat_id = message.chat.id
     user_id = message.from_user.id if message.from_user else None
     if not user_id or chat_id not in active_games or active_games[chat_id].get("status") != "playing": return
     
     game = active_games[chat_id]
     is_airdrop = game.get("is_airdrop", False)
+    is_bet = game.get("is_bet", False) # Cek apakah ini mode taruhan
 
     # Validasi jawaban
     input_word = message.text.lower().strip()
     
     # Syarat jawab: 
-    # 1. Kalau game biasa: Wajib reply bot DAN sudah join/masuk.
-    # 2. Kalau airdrop: Bebas siapa aja asal bener.
+    # 1. Kalau airdrop: Bebas siapa aja.
+    # 2. Kalau taruhan: Cuma boleh 2 orang yang ada di list players.
+    # 3. Kalau game biasa: Wajib reply bot & sudah join.
     if not is_airdrop:
         if not message.reply_to_message: return
         me = await client.get_me()
         if message.reply_to_message.from_user.id != me.id: return
         if user_id not in game["players"]: return
 
+    # --- LOGIC JAWABAN BENAR ---
     if (len(input_word) == game["length"] and input_word.startswith(game["prefix"]) and input_word.endswith(game["suffix"]) and input_word in ALL_WORDS):
-        poin = game.get("airdrop_points", 10)
-        await update_point(user_id, poin)
         
+        # 1. JIKA MODE TARUHAN (1x Jawab Langsung Menang & Transfer Poin)
+        if is_bet:
+            bet = game.get("bet_amount", 0)
+            pemenang_id = user_id
+            # Cari siapa lawannya buat dipotong poinnya
+            kalah_id = game["players"][0] if pemenang_id != game["players"][0] else game["players"][1]
+            
+            await update_point(pemenang_id, bet)   # Pemenang dapet poin taruhan
+            await update_point(kalah_id, -bet)     # Pecundang kehilangan poin
+            
+            # Ambil data lawan buat mention
+            lawan = await client.get_users(kalah_id)
+            
+            text_bet = (
+                f"🎉 **{message.from_user.mention} MENANG TARUHAN!**\n"
+                f"✅ Jawaban: `{input_word.upper()}`\n\n"
+                f"💰 Hadiah: `+{bet}` pts\n"
+                f"📉 {lawan.mention}: `-{bet}` pts\n\n"
+                f"Game taruhan selesai. Ketik /taruhan lagi yuk!"
+            )
+            del active_games[chat_id]
+            return await message.reply(text_bet)
+
+        # 2. JIKA MODE AIRDROP
+        poin = game.get("airdrop_points", 10)
         if is_airdrop:
+            await update_point(user_id, poin)
             del active_games[chat_id]
             return await message.reply(f"🎁 **AIRDROP DIAMBIL!**\n👤 {message.from_user.mention} dapet {poin} pts!\n\nGame selesai. Ketik /main buat main bareng lagi.")
-        # --------------------------------------------------
-        
-        u_data = await users.find_one({"_id": user_id})
-        # 1. Tambah (Q) sesi game ini
+
+        # 3. JIKA GAME BIASA (Leveling / Q Score)
         game["q_score"] = game.get("q_score", 1) + 2
         current_q = game["q_score"]
-        gelar = get_bakkata_tier(current_q)
+        logo_gelar = get_bakkata_tier(current_q) # Ambil logonya aja sesuai request lu
         
-        # Ganti baris update_point lama jadi ini:
-        await update_point(user_id, 10, q_score=current_q, gelar=gelar)
+        await update_point(user_id, 10, q_score=current_q, gelar=logo_gelar)
         
-        # 3. Tentukan panjang kata otomatis berdasarkan (Q)
+        # Tentukan panjang kata otomatis
         if current_q <= 20: new_len = 4
         elif current_q <= 40: new_len = 5
         elif current_q <= 60: new_len = 6
@@ -273,40 +298,41 @@ async def bakkata_engine(client, message):
         elif current_q <= 100: new_len = 8
         elif current_q <= 120: new_len = 9
         elif current_q <= 140: new_len = 10
-        else: new_len = 12 # WNI
+        else: new_len = 12 
             
         soal = generate_pattern_question(new_len)
-        
-        # Update data game buat soal berikutnya
         game.update({
-            "prefix": soal["prefix"], 
-            "suffix": soal["suffix"], 
-            "length": soal["length"], 
-            "swapped": False
+            "prefix": soal["prefix"], "suffix": soal["suffix"], 
+            "length": soal["length"], "swapped": False
         })
 
-        # --- PESAN 1: NOTIF BENAR ---
-        await message.reply(f"✅ **BENAR!** ({input_word.upper()})\n👤 {message.from_user.mention}\n📈 (Q) {current_q} — **{gelar}**")
-
-        # --- PESAN 2: SOAL SELANJUTNYA ---
+        await message.reply(f"✅ **BENAR!** ({input_word.upper()})\n👤 {message.from_user.mention}\n📈 (Q) {current_q} — {logo_gelar}")
         await message.reply(
-            f"**NEXT LEVEL: {gelar} ({new_len} Huruf)**\n"
+            f"**NEXT LEVEL: {logo_gelar} ({new_len} Huruf)**\n"
             f"📝 Soal: `{soal['pattern']}`\n"
             f"👉 Reply pesan ini buat jawab!"
         )
+
+    # --- LOGIC JAWABAN SALAH ---
     else:
-        # Pinalti cuma buat game biasa, airdrop jangan (biar gak spam poin minus)
         if not is_airdrop:
+            # Di mode taruhan, pinalti tetep ada biar makin seru
             await update_point(user_id, -5)
+            
+            # Jangan kick kalau lagi taruhan, biar adu sampe mampus
+            if is_bet:
+                return await message.reply(f"⚠️ {message.from_user.mention} **SALAH!** (-5 pts)")
+
+            # Sistem Kick (Cuma di game biasa)
             if "wrong" not in game: game["wrong"] = {}
             game["wrong"][user_id] = game["wrong"].get(user_id, 0) + 1
             if game["wrong"][user_id] >= 3:
                 if user_id in game["players"]: game["players"].remove(user_id)
-                await message.reply(f"💀 {message.from_user.mention} DIKICK! (Salah 3x)\nJangan baper ya, main lagi nanti! ketik /masuk")
+                await message.reply(f"💀 {message.from_user.mention} DIKICK! (Salah 3x)\nketik /masuk buat join lagi.")
                 
                 if not game["players"]:
                     del active_games[chat_id]
-                    await message.reply("💀 **GAME OVER!** Semua pemain telah gugur. Ketik /main lagi buat mulai baru.")
+                    await message.reply("💀 **GAME OVER!** Semua pemain gugur. Ketik /main lagi.")
             else:
                 await message.reply(f"⚠️ {message.from_user.mention} **SALAH!** (-5 pts)")
                 
@@ -865,24 +891,168 @@ async def bet_game_cb(client, callback_query):
     # Tombol nominal
     amounts = [500, 600, 700, 800, 900, 1000]
     btns = []
+    # Cari bagian ini dan ganti set_bet jadi gas_bet
     for i in range(0, len(amounts), 2):
         btns.append([
-            InlineKeyboardButton(f"💰 {amounts[i]}", callback_data=f"set_bet_{game_type}_{amounts[i]}"),
-            InlineKeyboardButton(f"💰 {amounts[i+1]}", callback_data=f"set_bet_{game_type}_{amounts[i+1]}")
-        ])
+            InlineKeyboardButton(f"💰 {amounts[i]}", callback_data=f"gas_bet_{game_type}_{amounts[i]}"),
+            InlineKeyboardButton(f"💰 {amounts[i+1]}", callback_data=f"gas_bet_{game_type}_{amounts[i+1]}")
+       ])
     
     await callback_query.message.edit_text(f"🎮 Game: **{game_type.upper()}**\n\nPilih jumlah taruhan poin lu:", reply_markup=InlineKeyboardMarkup(btns))
 
-# Callback gas taruhan (Tinggal sambungin ke logic game lu)
-@app.on_callback_query(filters.regex(r"^set_bet_"))
-async def set_bet_final(client, callback_query):
+@app.on_callback_query(filters.regex(r"^gas_bet_"))
+async def start_bet_lobby(client, callback_query):
     data = callback_query.data.split("_")
-    game_type = data[2]
+    game_type = data[2] # bakkata atau suit
     amount = int(data[3])
+    host_id = callback_query.from_user.id
+    chat_id = callback_query.message.chat.id
+
+    # Cek poin host lagi (takutnya poinnya abis pas lagi nunggu)
+    u_data = await users.find_one({"_id": host_id})
+    if u_data.get("point", 0) < amount:
+        return await callback_query.answer(f"Poin lu sisa {u_data.get('point', 0)}, gak cukup buat taruhan {amount}!", show_alert=True)
+
+    # Masukin ke active_games
+    active_games[chat_id] = {
+        "is_bet": True,
+        "bet_amount": amount,
+        "type": game_type,
+        "host": host_id,
+        "players": [host_id],
+        "status": "lobby",
+        "choices": {}, # Buat suit
+        "swapped_users": [] # Buat bakkata
+    }
+
+    text = (
+        f"💸 TARUHAN {amount} POIN DIMULAI!\n\n"
+        f"🎮 Game: **{game_type.upper()}**\n"
+        f"👤 Host: {callback_query.from_user.mention}\n"
+        f"💰 Taruhan: `{amount} pts`\n\n"
+        f"Klik tombol di bawah buat join. Syarat: Minimal punya `{amount}` poin!"
+    )
     
-    # Di sini nanti lu panggil fungsi mulai_handler atau suit_handler lu 
-    # tapi kasih flag "is_bet": True dan "amount": amount
-    await callback_query.message.edit_text(f"✅ Taruhan **{amount} pts** untuk game **{game_type}** diset!\n\n(Logic game taruhan sedang dikoneksikan...)")
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🤝 JOIN TARUHAN", callback_data="join_bet_match")]
+    ])
+    
+    await callback_query.message.edit_text(text, reply_markup=buttons)
+
+# LOGIC JOIN LAWAN
+@app.on_callback_query(filters.regex("join_bet_match"))
+async def join_bet_callback(client, callback_query):
+    cid = callback_query.message.chat.id
+    uid = callback_query.from_user.id
+    
+    if cid not in active_games or not active_games[cid].get("is_bet"):
+        return await callback_query.answer("Game udah gak ada.", show_alert=True)
+    
+    game = active_games[cid]
+    amount = game["bet_amount"]
+
+    if uid == game["host"]:
+        return await callback_query.answer("Lu kan host-nya, tunggu lawan join!", show_alert=True)
+
+    # CEK POIN LAWAN
+    u_data = await users.find_one({"_id": uid})
+    user_pts = u_data.get("point", 0) if u_data else 0
+    
+    if user_pts < amount:
+        return await callback_query.answer(f"Poin lu kurang! Lu cuma punya {user_pts} pts, butuh {amount} pts.", show_alert=True)
+
+    # Tambah pemain dan ganti status
+    game["players"].append(uid)
+    game["status"] = "playing"
+
+    if game["type"] == "suit":
+        # Kasih tombol suit
+        btns = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✊ Batu", callback_data="pilih_suit_batu"),
+            InlineKeyboardButton("🖐 Kertas", callback_data="pilih_suit_kertas"),
+            InlineKeyboardButton("✌️ Gunting", callback_data="pilih_suit_gunting")
+        ]])
+        await callback_query.message.edit_text(f"🚀 **TARUHAN MULAI!**\nLawan: {callback_query.from_user.mention}\n\nSilahkan pilih di bawah!", reply_markup=btns)
+    else:
+        # Bakkata: Kasih soal pertama
+        soal = generate_pattern_question(4)
+        game.update({
+            "prefix": soal["prefix"], "suffix": soal["suffix"], 
+            "length": soal["length"], "q_score": 1
+        })
+        await callback_query.message.edit_text(
+            f"🚀 **TARUHAN MULAI!**\nLawan: {callback_query.from_user.mention}\n\n"
+            f"Soal (4 Huruf): `{soal['pattern']}`\nReply buat jawab!"
+        )
+
+@app.on_callback_query(filters.regex(r"^pilih_suit_"))
+async def handle_pilihan_suit(client, callback_query):
+    cid = callback_query.message.chat.id
+    uid = callback_query.from_user.id
+    
+    # 1. Validasi: Apakah game aktif & user adalah pemain?
+    if cid not in active_games or uid not in active_games[cid]["players"]:
+        return await callback_query.answer("Lu gak ikutan main/taruhan ini!", show_alert=True)
+    
+    game = active_games[cid]
+    pilihan = callback_query.data.replace("pilih_suit_", "")
+    
+    # 2. Cek apakah user udah milih sebelumnya
+    if uid in game.get("choices", {}):
+        return await callback_query.answer("Sabar, nunggu lawan milih!", show_alert=True)
+    
+    # 3. Simpan pilihan (Inisialisasi dict choices kalau belum ada)
+    if "choices" not in game: game["choices"] = {}
+    game["choices"][uid] = pilihan
+    await callback_query.answer(f"Lu pilih {pilihan.upper()}!")
+
+    # 4. Kalau sudah 2 orang milih, baru diadu
+    if len(game["choices"]) == 2:
+        p1, p2 = game["players"]
+        move1, move2 = game["choices"][p1], game["choices"][p2]
+        
+        # Logic Menang/Kalah
+        winner = None
+        if move1 == move2:
+            winner = "SERI"
+        elif (move1 == "batu" and move2 == "gunting") or \
+             (move1 == "gunting" and move2 == "kertas") or \
+             (move1 == "kertas" and move2 == "batu"):
+            winner, loser = p1, p2
+        else:
+            winner, loser = p2, p1
+
+        # HANDLE HASIL SERI
+        if winner == "SERI":
+            game["choices"] = {} # Reset biar milih ulang
+            return await callback_query.message.edit_text(
+                f"🤝 **HASIL SERI!** ({move1} vs {move2})\n\nSilahkan pilih lagi!",
+                reply_markup=callback_query.message.reply_markup
+            )
+
+        # HANDLE PINDAH POIN (TARUHAN)
+        bet = game.get("bet_amount", 0)
+        is_bet = game.get("is_bet", False)
+        
+        win_user = await client.get_users(winner)
+        lose_user = await client.get_users(loser)
+
+        if is_bet:
+            await update_point(winner, bet)
+            await update_point(loser, -bet)
+            res_text = (
+                f"🎉 **{win_user.mention} MENANG TARUHAN!**\n"
+                f"🎮 `{move1.upper()}` vs `{move2.upper()}`\n\n"
+                f"💰 Hadiah: `+{bet}` pts\n"
+                f"📉 {lose_user.mention}: `-{bet}` pts"
+            )
+        else:
+            # Game biasa (bonus kecil)
+            await update_point(winner, 10)
+            res_text = f"🎉 **{win_user.mention} Menang!**\n🎮 `{move1.upper()}` vs `{move2.upper()}`\n(+10 pts)"
+
+        del active_games[cid]
+        await callback_query.message.edit_text(res_text)
 
 async def main():
     await app.start()
