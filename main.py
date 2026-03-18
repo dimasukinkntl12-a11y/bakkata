@@ -88,7 +88,7 @@ async def start_cmd(client, message):
     ])
     await message.reply(text, reply_markup=buttons)
 
-@app.on_message(filters.command("help"))
+@app.on_message(filters.command("bantuan"))
 async def help_cmd(client, message):
     help_text = await get_setting("help", "📖 **CARA MAIN BAKKATA**\n\nKetik /mulai di grup.")
     await message.reply(help_text)
@@ -96,15 +96,8 @@ async def help_cmd(client, message):
 @app.on_callback_query(filters.regex("show_help"))
 async def help_callback(client, callback_query):
     await callback_query.edit_message_text("📖 Silahkan cek menu bantuan dengan perintah /help di grup atau di sini.")
-    
-@app.on_message(filters.group & ~filters.new_chat_members, group=-1)
-async def auto_log_group(client, message):
-    chat, user = message.chat, message.from_user
-    if user:
-        # Cuma simpan ke database biar statistik di tombol Stats lu bener
-        await add_group_log(chat.id, chat.title, user.id, user.first_name)
 
-@app.on_message(filters.command("mulai") & filters.group)
+@app.on_message(filters.command("main") & filters.group)
 async def mulai_handler(client, message):
     chat_id = message.chat.id
     if chat_id in active_games: return await message.reply("Lobby masih terbuka atau game sedang jalan!")
@@ -113,8 +106,61 @@ async def mulai_handler(client, message):
     buttons = InlineKeyboardMarkup([[InlineKeyboardButton("Join", callback_data="join_game")],[InlineKeyboardButton("Mulai", callback_data="start_match")]])
     await message.reply(f"🎮 **Lobby Bakkata Dibuka!**\n\nHost: {message.from_user.first_name}\nTotal Player: 1", reply_markup=buttons)
 
+@app.on_message(filters.command("suit") & filters.group)
+async def suit_handler(client, message):
+    chat_id = message.chat.id
+    if chat_id in active_games: 
+        return await message.reply("Lobby game lain masih aktif di grup ini!")
+    
+    active_games[chat_id] = {
+        "type": "suit",
+        "host": message.from_user.id,
+        "players": [message.from_user.id],
+        "status": "lobby",
+        "choices": {} # Buat nyimpen pilihan: {user_id: "batu"}
+    }
+    
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Join Suit 🤝", callback_data="join_suit")]
+    ])
+    
+    await message.reply(
+        f"🎮 **Lobby Suit Dibuka!**\n\n"
+        f"Host: {message.from_user.first_name}\n"
+        f"Slot: 1/2\n\n"
+        "Klik join buat adu mekanik!", 
+        reply_markup=buttons
+    )
+
+@app.on_message(filters.command("gacha") & filters.group)
+async def gacha_group_notif(client, message):
+    await message.reply("❌ **Gacha dilarang di grup!**\nSilahkan ke private chat @bot buat main biar gak berisik.")
+
+@app.on_message(filters.command("gacha") & filters.private)
+async def gacha_cmd(client, message):
+    uid = message.from_user.id
+    u_data = await users.find_one({"_id": uid})
+    
+    # Ambil poin & saldo (kasih default 0 kalau gak ada)
+    point = u_data.get("point", 0) if u_data else 0
+    balance = u_data.get("balance", 0) if u_data else 0
+
+    text = (
+        f"🎰 MENU GACHA BAKKATA\n\n"
+        f"💰 Saldo: `Rp{balance:,}`\n"
+        f"💎 Poin: `{point} pts`\n\n"
+        f"🎫 Biaya: `1.000 pts` / Spin\n"
+        f"🎁 Hadiah: `Rp100` - `Rp100.000`"
+    )
+    
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎰 SPIN SEKARANG (1000 pts)", callback_data="spin_gacha")],
+        [InlineKeyboardButton("💳 Withdraw", callback_data="ask_wd"), InlineKeyboardButton("📊 Cek Saldo", callback_data="cek_saldo")]
+    ])
+    await message.reply(text, reply_markup=buttons)
+
 # --- GAME ENGINE ---
-@app.on_message(filters.group & ~filters.command(["mulai", "help", "start", "ganti", "top", "keluar", "gabung", "admin", "stop"]))
+@app.on_message(filters.group & ~filters.command(["main", "bantuan", "start", "ganti", "top", "keluar", "masuk", "admin", "stop"]))
 async def bakkata_engine(client, message):
     chat_id = message.chat.id
     user_id = message.from_user.id if message.from_user else None
@@ -123,17 +169,26 @@ async def bakkata_engine(client, message):
     game = active_games[chat_id]
     is_airdrop = game.get("is_airdrop", False)
 
-    # Kalau BUKAN airdrop, wajib reply ke bot
+    # Validasi jawaban
+    input_word = message.text.lower().strip()
+    
+    # Syarat jawab: 
+    # 1. Kalau game biasa: Wajib reply bot DAN sudah join/masuk.
+    # 2. Kalau airdrop: Bebas siapa aja asal bener.
     if not is_airdrop:
         if not message.reply_to_message: return
         me = await client.get_me()
         if message.reply_to_message.from_user.id != me.id: return
         if user_id not in game["players"]: return
 
-    input_word = message.text.lower().strip()
     if (len(input_word) == game["length"] and input_word.startswith(game["prefix"]) and input_word.endswith(game["suffix"]) and input_word in ALL_WORDS):
         poin = game.get("airdrop_points", 10)
         await update_point(user_id, poin)
+        
+        if is_airdrop:
+            del active_games[chat_id]
+            return await message.reply(f"🎁 **AIRDROP DIAMBIL!**\n👤 {message.from_user.mention} dapet {poin} pts!\n\nGame selesai. Ketik /main buat main bareng lagi.")
+        # --------------------------------------------------
         
         u_data = await users.find_one({"_id": user_id})
         pts = u_data.get("point", 0) if u_data else poin
@@ -143,8 +198,10 @@ async def bakkata_engine(client, message):
         game.update({"prefix": soal["prefix"], "suffix": soal["suffix"], "length": soal["length"], "swapped": False})
         if "wrong" in game: game["wrong"][user_id] = 0
 
-        await message.reply(f"✅ **BENAR!** ({input_word.upper()})\n👤 {message.from_user.mention}\n📈 Level: {new_level} ({pts} pts)\n\n**NEXT:** `{soal['pattern']}` ({soal['length']} Huruf)\n👉 _Reply buat jawab!_")
+        # Tambah info jumlah huruf di sini
+        await message.reply(f"✅ **BENAR!** ({input_word.upper()})\n👤 {message.from_user.mention}\n📈 Level: {new_level} ({pts} pts)\n\n**NEXT ({soal['length']} Huruf):** `{soal['pattern']}`\n👉 Reply buat jawab!")
     else:
+        # Pinalti cuma buat game biasa, airdrop jangan (biar gak spam poin minus)
         if not is_airdrop:
             await update_point(user_id, -5)
             if "wrong" not in game: game["wrong"] = {}
@@ -152,11 +209,15 @@ async def bakkata_engine(client, message):
             if game["wrong"][user_id] >= 3:
                 if user_id in game["players"]: game["players"].remove(user_id)
                 await message.reply(f"❌ {message.from_user.mention} **KALAH!** (Salah 3x)")
+                
+                if not game["players"]:
+                    del active_games[chat_id]
+                    await message.reply("💀 **GAME OVER!** Semua pemain telah gugur. Ketik /main lagi buat mulai baru.")
             else:
                 await message.reply(f"⚠️ {message.from_user.mention} **SALAH!** (-5 pts)")
-
+                
 # --- COMMANDS ---
-@app.on_message(filters.command("gabung") & filters.group)
+@app.on_message(filters.command("masuk") & filters.group)
 async def gabung_cmd(client, message):
     cid, uid = message.chat.id, message.from_user.id
     if cid not in active_games: return await message.reply("Gak ada game aktif.")
@@ -173,12 +234,18 @@ async def keluar_cmd(client, message):
 
 @app.on_message(filters.command("ganti") & filters.group)
 async def ganti_cmd(client, message):
-    cid = message.chat.id
+    cid, uid = message.chat.id, message.from_user.id
     if cid not in active_games or active_games[cid].get("status") != "playing": return
+    
+    # Orang luar nggak boleh ganti soal
+    if uid not in active_games[cid]["players"]:
+        return await message.reply("❌ Cuma pemain yang bisa ganti soal!")
+        
     if active_games[cid].get("swapped"): return await message.reply("Cuma bisa ganti 1x!")
+    
     soal = generate_pattern_question(active_games[cid]["length"])
     active_games[cid].update({"prefix": soal["prefix"], "suffix": soal["suffix"], "swapped": True})
-    await message.reply(f"🔄 **Soal Diganti!**\n\nBaru: `{soal['pattern']}`")
+    await message.reply(f"🔄 **Soal Diganti!**\n\nBaru ({soal['length']} Huruf): `{soal['pattern']}`")
 
 @app.on_message(filters.command("top"))
 async def top_cmd(client, message):
@@ -191,9 +258,14 @@ async def top_cmd(client, message):
 
 @app.on_message(filters.command("stop") & filters.group)
 async def stop_game(client, message):
-    if message.chat.id in active_games:
-        del active_games[message.chat.id]
-        await message.reply("🛑 Game dihentikan.")
+    cid, uid = message.chat.id, message.from_user.id
+    if cid in active_games:
+        # Cek apakah yang stop adalah Host atau salah satu Player
+        if uid == active_games[cid].get("host") or uid in active_games[cid].get("players", []):
+            del active_games[cid]
+            await message.reply("🛑 Game dihentikan oleh peserta.")
+        else:
+            await message.reply("❌ Lu nggak ikut main, jangan stop sembarangan!")
 
 @app.on_message(filters.group, group=-1)
 async def auto_log_group(client, message):
@@ -213,7 +285,7 @@ async def admin_panel(client, message):
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Stats", callback_data="bot_stats"), InlineKeyboardButton("⚙️ Settings", callback_data="bot_settings")],
         [InlineKeyboardButton("📢 BC User", callback_data="bc_user"), InlineKeyboardButton("👥 BC Grup", callback_data="bc_group")],
-        [InlineKeyboardButton("🎁 Airdrop", callback_data="setup_airdrop")]
+        [InlineKeyboardButton("🎰 Gacha Chance", callback_data="set_gacha_btn"), InlineKeyboardButton("🎁 Airdrop", callback_data="setup_airdrop")]
     ])
     await message.reply("🛠 **Admin Panel Bakkata**", reply_markup=buttons)
 # --- CALLBACKS ---
@@ -222,6 +294,79 @@ async def my_score_callback(client, callback_query):
     u = await users.find_one({"_id": callback_query.from_user.id})
     score = u.get("point", 0) if u else 0
     await callback_query.answer(f"Skor lu: {score} pts", show_alert=True)
+
+@app.on_callback_query(filters.regex(r"^(join_suit|pilih_suit_)"))
+async def suit_callback(client, callback_query):
+    data = callback_query.data
+    cid = callback_query.message.chat.id
+    uid = callback_query.from_user.id
+    
+    if cid not in active_games or active_games[cid].get("type") != "suit":
+        return await callback_query.answer("Game udah gak aktif.", show_alert=True)
+
+    game = active_games[cid]
+
+    # --- LOGIC JOIN ---
+    if data == "join_suit":
+        if uid in game["players"]:
+            return await callback_query.answer("Lu udah di dalem lobby!", show_alert=True)
+        if len(game["players"]) >= 2:
+            return await callback_query.answer("Lobby penuh!", show_alert=True)
+        
+        game["players"].append(uid)
+        game["status"] = "playing"
+        
+        # Langsung ganti tampilan jadi menu pilih
+        buttons = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✊ Batu", callback_data="pilih_suit_batu"),
+                InlineKeyboardButton("🖐 Kertas", callback_data="pilih_suit_kertas"),
+                InlineKeyboardButton("✌️ Gunting", callback_data="pilih_suit_gunting")
+            ]
+        ])
+        await callback_query.message.edit_text(
+            f"🚀 Game Dimulai!\n\n"
+            f"Pemain: {len(game['players'])}/2\n"
+            "Silahkan pilih di bawah ini!",
+            reply_markup=buttons
+        )
+
+    # --- LOGIC PILIH ---
+    elif data.startswith("pilih_suit_"):
+        if uid not in game["players"]:
+            return await callback_query.answer("Lu bukan pemain!", show_alert=True)
+        
+        if uid in game["choices"]:
+            return await callback_query.answer("Lu udah milih, tunggu lawan!", show_alert=True)
+        
+        pilihan = data.split("_")[2]
+        game["choices"][uid] = pilihan
+        await callback_query.answer(f"Lu milih {pilihan.upper()}!", show_alert=True)
+
+        # Kalau dua-duanya udah milih, tentukan pemenang
+        if len(game["choices"]) == 2:
+            p1_id, p2_id = game["players"]
+            p1_choice = game["choices"][p1_id]
+            p2_choice = game["choices"][p2_id]
+            
+            # Ambil mention nama
+            p1_name = (await client.get_users(p1_id)).first_name
+            p2_name = (await client.get_users(p2_id)).first_name
+
+            # Aturan Suit
+            rules = {"batu": "gunting", "kertas": "batu", "gunting": "kertas"}
+            
+            result_text = f"🏁 HASIL SUIT\n\n👤 {p1_name}: {p1_choice.upper()}\n👤 {p2_name}: {p2_choice.upper()}\n\n"
+            
+            if p1_choice == p2_choice:
+                result_text += "⚖️ HASILNYA SERI!"
+            elif rules[p1_choice] == p2_choice:
+                result_text += f"🏆 {p1_name.upper()} MENANG!"
+            else:
+                result_text += f"🏆 {p2_name.upper()} MENANG!"
+            
+            del active_games[cid] # Hapus game setelah selesai
+            await callback_query.message.edit_text(result_text)
 
 @app.on_callback_query(filters.regex("join_game"))
 async def join_callback(client, callback_query):
@@ -238,7 +383,7 @@ async def start_match_cb(client, callback_query):
     if callback_query.from_user.id != active_games[cid]["host"]: return await callback_query.answer("Cuma host!")
     soal = generate_pattern_question(4)
     active_games[cid].update({"status": "playing", "prefix": soal["prefix"], "suffix": soal["suffix"], "length": soal["length"]})
-    await callback_query.message.edit_text(f"🚀 **Game Dimulai!**\n\nSoal: `{soal['pattern']}`\nReply buat jawab!")
+    await callback_query.message.edit_text(f"🚀 Game Dimulai!\n\nSoal ({soal['length']} Huruf): `{soal['pattern']}`\nReply buat jawab!")
 
 @app.on_callback_query(filters.regex("setup_airdrop") & filters.user(ADMIN_ID))
 async def airdrop_callback(client, callback_query):
@@ -246,11 +391,20 @@ async def airdrop_callback(client, callback_query):
     all_g = await groups.find().to_list(1000)
     for g in all_g:
         try:
-            active_games[g["_id"]] = {"status": "playing", "is_airdrop": True, "airdrop_points": 50, "prefix": soal["prefix"], "suffix": soal["suffix"], "length": soal["length"]}
-            await client.send_message(g["_id"], f"🎁 **AIRDROP 50 POIN!**\n\nSoal: `{soal['pattern']}`\nReply buat ambil!")
+            active_games[g["_id"]] = {
+                "status": "playing", 
+                "is_airdrop": True, 
+                "airdrop_points": 50, 
+                "prefix": soal["prefix"], 
+                "suffix": soal["suffix"], 
+                "length": soal["length"],
+                "pattern": soal["pattern"] # Tambahkan ini biar konsisten
+            }
+            await client.send_message(g["_id"], f"🎁 **AIRDROP 50 POIN!**\n\nSoal ({soal['length']} Huruf): `{soal['pattern']}`\n👉 Langsung jawab (tanpa masuk lobby)!")
+            await asyncio.sleep(0.3)
         except: continue
     await callback_query.answer("Airdrop disebar!")
-
+    
 @app.on_callback_query(filters.regex("bot_stats") & filters.user(ADMIN_ID))
 async def stats_callback(client, callback_query):
     total_users = await users.count_documents({})
@@ -322,6 +476,164 @@ async def handle_set_settings(client, callback_query):
     await set_setting(key, val)
     await ask.reply(f"✅ Berhasil update setting: **{key}**!")
 
+@app.on_callback_query(filters.regex(r"^wd_done_") & filters.user(ADMIN_ID))
+async def wd_done_callback(client, callback_query):
+    # Format data: wd_done_{user_id}_{nominal}
+    data = callback_query.data.split("_")
+    target_uid = int(data[2])
+    nominal = int(data[3])
+    
+    try:
+        # 1. Kirim notif ke User kalau duit sudah cair
+        notif_text = (
+            f"💰 WITHDRAW CAIR!\n\n"
+            f"Halo, penarikan saldo lu sebesar **Rp{nominal:,}** udah ditransfer sama Admin ya.\n"
+            f"Silahkan cek rekening/e-wallet lu. Makasih udah main!"
+        )
+        await client.send_message(target_uid, notif_text)
+        
+        # 2. Update pesan di admin biar gak bingung mana yang udah dikerjain
+        await callback_query.edit_message_text(
+            f"{callback_query.message.text}\n\n✅ **STATUS: SELESAI DITRANSFER**"
+        )
+        await callback_query.answer("Notif berhasil dikirim ke user!", show_alert=True)
+        
+    except Exception as e:
+        await callback_query.answer(f"Gagal kirim notif: {e}", show_alert=True)
+
+@app.on_callback_query(filters.regex(r"^(spin_gacha|cek_saldo|ask_wd)"))
+async def gacha_system_callback(client, callback_query):
+    uid = callback_query.from_user.id
+    cid = callback_query.message.chat.id
+    data = callback_query.data
+    
+    # Tarik data user terbaru dari DB biar gak bisa manipulasi saldo
+    u_data = await users.find_one({"_id": uid})
+    if not u_data:
+        return await callback_query.answer("Data lu belum kedaftar, chat /start dulu!", show_alert=True)
+
+    # --- 1. LOGIC SPIN GACHA ---
+    if data == "spin_gacha":
+        if u_data.get("point", 0) < 1000:
+            return await callback_query.answer("Poin lu kurang (Min 1000 pts)!", show_alert=True)
+
+        # Potong poin dulu biar gak bisa double klik (spam)
+        await users.update_one({"_id": uid}, {"$inc": {"point": -1000}})
+        
+        # Animasi Gacha
+        msg = callback_query.message
+        anim = ["🎰 | 🎰 | 🎰", "🍎 | 🎰 | 🎰", "🍎 | 💎 | 🎰", "🍎 | 💎 | 💰"]
+        for a in anim:
+            await msg.edit_text(f"SPIN BERLANGSUNG...\n\n`{a}`")
+            await asyncio.sleep(0.5)
+
+        # Ambil chance dari setting admin (kalau belum ada, pake default)
+        weights = await get_setting("gacha_chance", [70, 20, 8, 1.5, 0.5])
+        hadiah_list = [100, 1000, 10000, 50000, 100000]
+        hasil = random.choices(hadiah_list, weights=weights)[0]
+        
+        # Update saldo hasil menang
+        await users.update_one({"_id": uid}, {"$inc": {"balance": hasil}})
+        
+        await msg.edit_text(
+            f"🎉 JACKPOT!\n\nLu dapet: **Rp{hasil:,}**\nSaldo sekarang: `Rp{u_data.get('balance', 0) + hasil:,}`",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Main Lagi 🎰", callback_data="spin_gacha")]])
+        )
+
+    # --- 2. CEK SALDO ---
+    elif data == "cek_saldo":
+        await callback_query.answer(f"Saldo lu: Rp{u_data.get('balance', 0):,}", show_alert=True)
+
+    # --- 3. SISTEM WITHDRAW (WD) ---
+    elif data == "ask_wd":
+        balance = u_data.get("balance", 0)
+        if balance < 50000:
+            return await callback_query.answer("Minimal Withdraw Rp50.000!", show_alert=True)
+            
+        # Tutup notif loading di tombol
+        await callback_query.answer()
+
+        try:
+            # Pake pyromod buat nanya detail
+            ask_bank = await client.ask(cid, "🏦 FORM WITHDRAW\n\nKetik: Nama Bank/E-Wallet & Nomor Rekening\nContoh: `DANA - 08123456789`", filters=filters.text)
+            rekening = ask_bank.text
+            
+            ask_nominal = await client.ask(cid, f"💰 SALDO LU: `Rp{balance:,}`\n\nMau tarik berapa? (Ketik angkanya aja):", filters=filters.text)
+            
+            # Cek input angka atau bukan
+            if not ask_nominal.text.isdigit():
+                return await client.send_message(cid, "❌ Input harus angka!")
+            
+            nominal = int(ask_nominal.text)
+            
+            if nominal < 50000:
+                return await client.send_message(cid, "❌ Minimal tarik Rp50.000!")
+            if nominal > balance:
+                return await client.send_message(cid, "❌ Saldo lu gak cukup buat narik segitu!")
+
+            # POTONG SALDO DULU (Biar user gak bisa WD berkali-kali sebelum admin proses)
+            await users.update_one({"_id": uid}, {"$inc": {"balance": -nominal}})
+    
+            # Lapor ke Admin dengan Tombol Done
+            log_text = (
+                f"🚨 **ADA YANG WD NIH!**\n\n"
+                f"👤 User: {callback_query.from_user.mention} (`{uid}`)\n"
+                f"🏦 Bank: `{rekening}`\n"
+                f"💵 Nominal: `Rp{nominal:,}`\n"
+                f"💎 Sisa Saldo: `Rp{balance - nominal:,}`"
+            )
+            
+            # Tambahin tombol buat admin klik kalau sudah transfer
+            btn_admin = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ DONE (SUDAH TF)", callback_data=f"wd_done_{uid}_{nominal}")]
+            ])
+            
+            await client.send_message(ADMIN_ID, log_text, reply_markup=btn_admin)
+            
+            # Notif ke User
+            await client.send_message(cid, "✅ WD BERHASIL DIAJUKAN!\nPermintaan lu udah masuk ke admin. Tunggu dana cair ya!")
+            
+        except Exception as e:
+            # Kalau user kelamaan gak jawab atau error lain
+            await client.send_message(cid, "❌ Gagal memproses WD. Pastikan lu jawab pesan bot dengan bener.")
+
+@app.on_callback_query(filters.regex("set_gacha_btn") & filters.user(ADMIN_ID))
+async def set_gacha_chance_cb(client, callback_query):
+    cid = callback_query.message.chat.id
+    
+    # Ambil settingan sekarang biar lu tau sebelumnya berapa
+    current = await get_setting("gacha_chance", [70, 20, 8, 1.5, 0.5])
+    
+    guide_text = (
+        "⚙️ **SETTING PERSENTASE GACHA**\n\n"
+        f"Persentase saat ini:\n"
+        f"▫️ Rp100: `{current[0]}%` (Ampas)\n"
+        f"▫️ Rp1.000: `{current[1]}%` (Biasa)\n"
+        f"▫️ Rp10.000: `{current[2]}%` (Lumayan)\n"
+        f"▫️ Rp50.000: `{current[3]}%` (Jackpot 1)\n"
+        f"▫️ Rp100.000: `{current[4]}%` (Jackpot 2)\n\n"
+        "**Format Input:**\n"
+        "Kirim 5 angka dipisah spasi. Total harus 100.\n"
+        "Contoh: `80 15 4 0.9 0.1`"
+    )
+    
+    await callback_query.answer() # Biar loading tombol ilang
+    ask = await client.ask(cid, guide_text, filters=filters.text)
+    
+    try:
+        # Pecah input jadi list angka
+        new_val = [float(x) for x in ask.text.split()]
+        
+        if len(new_val) != 5:
+            return await ask.reply("❌ Harus 5 angka, Yan! Ulangi.")
+            
+        # Update ke database
+        await set_setting("gacha_chance", new_val)
+        await ask.reply(f"✅ **BERHASIL!** Peluang gacha udah diupdate.")
+        
+    except:
+        await ask.reply("❌ Format salah! Pastikan cuma angka dan spasi.")
+            
 @app.on_message(filters.new_chat_members)
 async def new_group_log(client, message):
     me = await client.get_me() # Ganti bagian ini
@@ -338,15 +650,10 @@ async def new_group_log(client, message):
 
 async def main():
     await app.start()
-    
-    # Panggil db dari database.py dan pasang ke client
     from database import db
-    app.db = db
-    
-    print(">>> BOT BAKKATA BERHASIL NYALA! <<<")
-    from pyrogram import idle
-    await idle()
-    await app.stop()
+    app.db = db 
 
 if __name__ == "__main__":
-    app.run(main())
+    # app.run() otomatis handle start, idle, dan stop
+    print(">>> BOT BAKKATA BERHASIL NYALA! <<<")
+    app.run()
