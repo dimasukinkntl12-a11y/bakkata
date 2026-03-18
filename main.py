@@ -43,14 +43,14 @@ def load_kbbi():
 ALL_WORDS = load_kbbi()
 
 def get_bakkata_tier(q_score):
-    if q_score <= 20: return "🟢 Easy"
-    elif q_score <= 40: return "🟡 Medium"
-    elif q_score <= 60: return "🔴 Hard"
-    elif q_score <= 80: return "🥉 Harapan 3"
-    elif q_score <= 100: return "🥈 Harapan 2"
-    elif q_score <= 120: return "🥇 Jawara Harapan"
-    elif q_score <= 140: return "🏆 Legend Kata"
-    else: return "👑 WNI"
+    if q_score <= 20: return "🟢"
+    elif q_score <= 40: return "🟡"
+    elif q_score <= 60: return "🔴"
+    elif q_score <= 80: return "🥉"
+    elif q_score <= 100: return "🥈"
+    elif q_score <= 120: return "🥇"
+    elif q_score <= 140: return "🏆"
+    else: return "👑"
 
     # --- HELPERS (Nomer 2: Fungsi Cek FSub) ---
 async def check_fsub(client, user_id):
@@ -324,18 +324,21 @@ async def ganti_cmd(client, message):
     
 @app.on_message(filters.command("top"))
 async def top_cmd(client, message):
-    # Ambil 10 besar berdasarkan Poin
     top_10 = await users.find().sort("point", -1).limit(10).to_list(10)
-    text = "🏆 TOP SCORE BAKKATA\n\n"
+    text = "🏆 TOP 10 BAKKATA\n\n"
     
     for i, u in enumerate(top_10, 1):
         nama = u.get('name', 'User')
         poin = u.get('point', 0)
-        rekor_gelar = u.get('high_gelar', '🟢 Easy') # Gelar tertinggi dia
+        # Ambil logo gelar tertinggi (Default Easy)
+        logo = u.get('high_gelar', "🟢") 
         
-        text += f"{i}. {rekor_gelar} | {nama} — `{poin} pts`\n"
+        # Tampilan: 1. 👑 Ryan — 5000 pts
+        text += f"{i}. {logo} **{nama}** — `{poin} pts`\n"
         
-    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("📊 Cek Score Saya", callback_data="my_score")]])
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Cek Score Saya", callback_data="my_score")]
+    ])
     await message.reply(text, reply_markup=buttons)
 
 @app.on_message(filters.command("stop") & filters.group)
@@ -403,17 +406,36 @@ async def my_score_callback(client, callback_query):
     
     poin = u.get("point", 0)
     hq = u.get("high_q", 0)
-    hg = u.get("high_gelar", "Belum Ada")
+    hg = u.get("high_gelar", "🟢")
     
     pesan = (
-        f"📊 STATISTIK LU\n\n"
-        f"💎 Total Poin: `{poin} pts`\n"
-        f"🔥 High Score (Q): `{hq}`\n"
-        f"🏆 Gelar Tertinggi: **{hg}**"
+        f"👤 PROFIL LU\n\n"
+        f"💎 Poin: `{poin} pts`\n"
+        f"🔥 Rekor (Q): `{hq}`\n"
+        f"🏆 Gelar: {hg}\n\n"
+        f"Gelar bakal update otomatis pas lu dapet (Q) baru!"
     )
     
-    await callback_query.message.reply(pesan)
-    await callback_query.answer()
+    # Ganti teks pesan TOP 10 jadi skor user
+    await callback_query.edit_message_text(
+        pesan, 
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Kembali", callback_data="back_to_top")]])
+    )
+
+@app.on_callback_query(filters.regex("back_to_top"))
+async def back_to_top_callback(client, callback_query):
+    # Panggil lagi fungsi top_cmd tapi pake edit_message biar balik
+    # Kita modif sedikit biar top_cmd bisa dipanggil manual
+    top_10 = await users.find().sort("point", -1).limit(10).to_list(10)
+    text = "🏆 TOP 10 BAKKATA\n\n"
+    for i, u in enumerate(top_10, 1):
+        text += f"{i}. {u.get('high_gelar', '🟢')} **{u.get('name', 'User')}** — `{u.get('point', 0)} pts`\n"
+    
+    await callback_query.edit_message_text(
+        text, 
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📊 Cek Score Saya", callback_data="my_score")]])
+    )
+    
 @app.on_callback_query(filters.regex(r"^(join_suit|pilih_suit_)"))
 async def suit_callback(client, callback_query):
     data = callback_query.data
