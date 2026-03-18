@@ -12,7 +12,7 @@ groups = db["groups"]
 logs = db["logs"]
 
 async def add_user_log(user_id, name, username):
-async def add_user_log(user_id, name, username):
+    """Log tiap orang klik start pertama kali"""
     user = await users.find_one({"_id": user_id})
     if not user:
         data = {
@@ -20,7 +20,7 @@ async def add_user_log(user_id, name, username):
             "name": name,
             "username": username,
             "point": 0,
-            "balance": 0,
+            "balance": 0, # Tambah saldo buat Gacha
             "level": 1 
         }
         await users.insert_one(data)
@@ -44,21 +44,22 @@ async def add_group_log(group_id, group_name, added_by_id, added_by_name):
     return False
 
 async def update_point(user_id, amount):
-    # Langsung update poin, min 0 dicek di logic bot aja biar cepet
-    await users.update_one(
-        {"_id": user_id},
-        {"$inc": {"point": amount}}
-    )
-    
-    # Update level otomatis berdasarkan poin terbaru
+    """Update poin & Leveling Otomatis"""
     user = await users.find_one({"_id": user_id})
-    if user:
-        new_level = (user.get("point", 0) // 100) + 1
-        await users.update_one(
-            {"_id": user_id},
-            {"$set": {"level": new_level}}
-        )
-        
+    if not user: 
+        return
+    
+    # Hitung poin baru (minimal 0)
+    new_point = max(0, user.get("point", 0) + amount)
+    
+    # Hitung level baru (tiap 100 poin naik 1 level)
+    new_level = (new_point // 100) + 1
+    
+    await users.update_one(
+        {"_id": user_id}, 
+        {"$set": {"point": new_point, "level": new_level}}
+    )
+
 async def get_top_players():
     """Ambil data buat /top"""
     return await users.find().sort("point", -1).limit(10).to_list(length=10)
