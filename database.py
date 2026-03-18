@@ -10,6 +10,18 @@ db = client["bakkata_db"]
 users = db["users"]
 groups = db["groups"]
 logs = db["logs"]
+# Tambahin koleksi buat nyimpen settingan Admin
+settings = db["settings"]
+
+# --- SETTINGS HELPERS (PENTING BUAT FSUB & ADMIN) ---
+async def get_setting(key, default=None):
+    """Ambil settingan dari DB (seperti status fsub atau link dev)"""
+    res = await settings.find_one({"_id": key})
+    return res["value"] if res else default
+
+async def set_setting(key, value):
+    """Simpan settingan ke DB"""
+    await settings.update_one({"_id": key}, {"$set": {"value": value}}, upsert=True)
 
 async def add_user_log(user_id, name, username):
     """Log tiap orang klik start pertama kali"""
