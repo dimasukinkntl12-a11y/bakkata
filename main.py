@@ -228,7 +228,6 @@ async def taruhan_handler(client, message):
 # --- GAME ENGINE ---
 @app.on_message(filters.group & ~filters.command(["main", "bantuan", "start", "ganti", "top", "taruhan", "keluar", "masuk", "admin", "stop"]))
 async def bakkata_engine(client, message):
-async def bakkata_engine(client, message):
     chat_id = message.chat.id
     user_id = message.from_user.id if message.from_user else None
     if not user_id or chat_id not in active_games or active_games[chat_id].get("status") != "playing": return
