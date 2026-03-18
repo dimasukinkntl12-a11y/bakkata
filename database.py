@@ -55,22 +55,24 @@ async def add_group_log(group_id, group_name, added_by_id, added_by_name):
         return True
     return False
 
-async def update_point(user_id, amount):
-    """Update poin & Leveling Otomatis"""
+# Tambahin parameter q_score di fungsi update_point
+async def update_point(user_id, amount, q_score=0, gelar="Easy"):
     user = await users.find_one({"_id": user_id})
-    if not user: 
-        return
+    if not user: return
     
-    # Hitung poin baru (minimal 0)
     new_point = max(0, user.get("point", 0) + amount)
     
-    # Hitung level baru (tiap 100 poin naik 1 level)
-    new_level = (new_point // 100) + 1
+    # Ambil rekor Q lama, kalau gak ada anggap 0
+    high_q = user.get("high_q", 0)
     
-    await users.update_one(
-        {"_id": user_id}, 
-        {"$set": {"point": new_point, "level": new_level}}
-    )
+    update_data = {"$set": {"point": new_point}}
+    
+    # Kalau Q sekarang lebih tinggi dari rekor, update High Q & High Gelar
+    if q_score > high_q:
+        update_data["$set"]["high_q"] = q_score
+        update_data["$set"]["high_gelar"] = gelar
+        
+    await users.update_one({"_id": user_id}, update_data)
 
 async def get_top_players():
     """Ambil data buat /top"""
