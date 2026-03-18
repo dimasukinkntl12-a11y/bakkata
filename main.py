@@ -102,7 +102,13 @@ async def mulai_handler(client, message):
     chat_id = message.chat.id
     if chat_id in active_games: return await message.reply("Lobby masih terbuka atau game sedang jalan!")
     
-    active_games[chat_id] = {"host": message.from_user.id, "players": [message.from_user.id], "status": "lobby"}
+    # Tambahin swapped_users biar jatah ganti 1x per orang
+    active_games[chat_id] = {
+        "host": message.from_user.id, 
+        "players": [message.from_user.id], 
+        "status": "lobby",
+        "swapped_users": [] 
+    }
     buttons = InlineKeyboardMarkup([[InlineKeyboardButton("Join", callback_data="join_game")],[InlineKeyboardButton("Mulai", callback_data="start_match")]])
     await message.reply(f"🎮 **Lobby Bakkata Dibuka!**\n\nHost: {message.from_user.first_name}\nTotal Player: 1", reply_markup=buttons)
 
@@ -208,7 +214,7 @@ async def bakkata_engine(client, message):
             game["wrong"][user_id] = game["wrong"].get(user_id, 0) + 1
             if game["wrong"][user_id] >= 3:
                 if user_id in game["players"]: game["players"].remove(user_id)
-                await message.reply(f"❌ {message.from_user.mention} **KALAH!** (Salah 3x)")
+                await message.reply(f"💀 {message.from_user.mention} DIKICK! (Salah 3x)\nJangan baper ya, main lagi nanti! ketik /masuk")
                 
                 if not game["players"]:
                     del active_games[chat_id]
@@ -233,20 +239,26 @@ async def keluar_cmd(client, message):
         await message.reply("👋 Lu keluar.")
 
 @app.on_message(filters.command("ganti") & filters.group)
+@app.on_message(filters.command("ganti") & filters.group)
 async def ganti_cmd(client, message):
     cid, uid = message.chat.id, message.from_user.id
     if cid not in active_games or active_games[cid].get("status") != "playing": return
     
-    # Orang luar nggak boleh ganti soal
-    if uid not in active_games[cid]["players"]:
-        return await message.reply("❌ Cuma pemain yang bisa ganti soal!")
-        
-    if active_games[cid].get("swapped"): return await message.reply("Cuma bisa ganti 1x!")
+    game = active_games[cid]
+    if uid not in game["players"]: return await message.reply("❌ Lu gak ikut main!")
     
-    soal = generate_pattern_question(active_games[cid]["length"])
-    active_games[cid].update({"prefix": soal["prefix"], "suffix": soal["suffix"], "swapped": True})
-    await message.reply(f"🔄 **Soal Diganti!**\n\nBaru ({soal['length']} Huruf): `{soal['pattern']}`")
-
+    # Cek list swapped_users
+    if uid in game.get("swapped_users", []):
+        return await message.reply(f"❌ {message.from_user.mention}, jatah ganti lu udah abis!")
+    
+    soal = generate_pattern_question(game["length"])
+    game.update({"prefix": soal["prefix"], "suffix": soal["suffix"]})
+    
+    # Masukin ID user ke daftar yang udah pake jatah ganti
+    game.setdefault("swapped_users", []).append(uid)
+    
+    await message.reply(f"🔄 **SOAL DIGANTI!**\nOleh: {message.from_user.mention}\n\nBaru: `{soal['pattern']}`")
+    
 @app.on_message(filters.command("top"))
 async def top_cmd(client, message):
     top_10 = await users.find().sort("point", -1).limit(10).to_list(10)
@@ -285,10 +297,29 @@ async def admin_panel(client, message):
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Stats", callback_data="bot_stats"), InlineKeyboardButton("⚙️ Settings", callback_data="bot_settings")],
         [InlineKeyboardButton("📢 BC User", callback_data="bc_user"), InlineKeyboardButton("👥 BC Grup", callback_data="bc_group")],
-        [InlineKeyboardButton("🎰 Gacha Chance", callback_data="set_gacha_btn"), InlineKeyboardButton("🎁 Airdrop", callback_data="setup_airdrop")]
+        [InlineKeyboardButton("🎰 Gacha Chance", callback_data="set_gacha_btn"), InlineKeyboardButton("🎁 Airdrop", callback_data="setup_airdrop")],
+        [InlineKeyboardButton("💰 Manage User", callback_data="manage_user")]
     ])
     await message.reply("🛠 **Admin Panel Bakkata**", reply_markup=buttons)
 # --- CALLBACKS ---
+# Tambahin ini di bawah fungsi admin_panel lu
+@app.on_callback_query(filters.regex("manage_user") & filters.user(ADMIN_ID))
+async def manage_user_cb(client, callback_query):
+    chat_id = callback_query.message.chat.id
+    # Pakai pyromod.listen buat nanya
+    ask_id = await client.ask(chat_id, "🔢 **SET POIN/SALDO**\nMasukkan ID User:")
+    target_id = int(ask_id.text)
+    
+    ask_type = await client.ask(chat_id, "Mau set apa? (ketik: **poin** atau **saldo**):")
+    tipe = "point" if "poin" in ask_type.text.lower() else "balance"
+    
+    ask_val = await client.ask(chat_id, f"Masukkan jumlah {tipe} baru:")
+    val = int(ask_val.text)
+    
+    # Update ke database
+    await users.update_one({"_id": target_id}, {"$set": {tipe: val}})
+    await ask_val.reply(f"✅ Berhasil! User `{target_id}` sekarang punya {val} {tipe}.")
+
 @app.on_callback_query(filters.regex("my_score"))
 async def my_score_callback(client, callback_query):
     u = await users.find_one({"_id": callback_query.from_user.id})
