@@ -201,8 +201,32 @@ async def gacha_cmd(client, message):
     ])
     await message.reply(text, reply_markup=buttons)
 
+@app.on_message(filters.command("taruhan") & filters.group)
+async def taruhan_handler(client, message):
+    uid = message.from_user.id
+    is_joined = await check_fsub(client, message.from_user.id)
+    if not is_joined:
+        channel = await get_setting("fsub_user")
+        btn = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Join Channel 📢", url=f"https://t.me/{channel}")],
+            [InlineKeyboardButton("✅ SAYA SUDAH JOIN", callback_data="sudah_join")]
+        ])
+        return await message.reply("⚠️ **LU WAJIB JOIN DULU!**\nBiar bot bisa jalan terus, join channel di bawah ya:", reply_markup=btn)
+    u_data = await users.find_one({"_id": uid})
+    points = u_data.get("point", 0) if u_data else 0
+    
+    if points < 500:
+        return await message.reply(f"❌ **POIN KURANG!**\nMinimal punya 500 pts buat taruhan. Poin lu cuma `{points}` pts.")
+    
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📝 Tebak Kata", callback_data="bet_game_bakkata"),
+         InlineKeyboardButton("🤝 Suit", callback_data="bet_game_suit")]
+    ])
+    await message.reply(f"🎰 MENU TARUHAN\nUser: {message.from_user.first_name}\nPilih game yang mau ditaruhin:", reply_markup=buttons)
+
+
 # --- GAME ENGINE ---
-@app.on_message(filters.group & ~filters.command(["main", "bantuan", "start", "ganti", "top", "keluar", "masuk", "admin", "stop"]))
+@app.on_message(filters.group & ~filters.command(["main", "bantuan", "start", "ganti", "top", "taruhan", "keluar", "masuk", "admin", "stop"]))
 async def bakkata_engine(client, message):
     chat_id = message.chat.id
     user_id = message.from_user.id if message.from_user else None
@@ -833,29 +857,6 @@ async def new_group_log(client, message):
                     await client.send_message(log_id, f"➕ **BOT MASUK GRUP BARU**\n📍 {chat.title}\n🆔 `{chat.id}`\n👤 Oleh: {message.from_user.mention}")
                 except Exception as e: 
                     print(f"Log Error: {e}")
-
-@app.on_message(filters.command("taruhan") & filters.group)
-async def taruhan_handler(client, message):
-    uid = message.from_user.id
-    is_joined = await check_fsub(client, message.from_user.id)
-    if not is_joined:
-        channel = await get_setting("fsub_user")
-        btn = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Join Channel 📢", url=f"https://t.me/{channel}")],
-            [InlineKeyboardButton("✅ SAYA SUDAH JOIN", callback_data="sudah_join")]
-        ])
-        return await message.reply("⚠️ **LU WAJIB JOIN DULU!**\nBiar bot bisa jalan terus, join channel di bawah ya:", reply_markup=btn)
-    u_data = await users.find_one({"_id": uid})
-    points = u_data.get("point", 0) if u_data else 0
-    
-    if points < 500:
-        return await message.reply(f"❌ **POIN KURANG!**\nMinimal punya 500 pts buat taruhan. Poin lu cuma `{points}` pts.")
-    
-    buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📝 Tebak Kata", callback_data="bet_game_bakkata"),
-         InlineKeyboardButton("🤝 Suit", callback_data="bet_game_suit")]
-    ])
-    await message.reply(f"🎰 MENU TARUHAN\nUser: {message.from_user.first_name}\nPilih game yang mau ditaruhin:", reply_markup=buttons)
 
 # Callback pilih nominal taruhan
 @app.on_callback_query(filters.regex(r"^bet_game_"))
