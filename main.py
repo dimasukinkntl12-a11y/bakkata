@@ -131,7 +131,7 @@ async def help_cmd(client, message):
 
 @app.on_callback_query(filters.regex("show_help"))
 async def help_callback(client, callback_query):
-    await callback_query.edit_message_text("📖 Silahkan cek menu bantuan dengan perintah /help di grup atau di sini.")
+    await callback_query.edit_message_text("📖 Silahkan cek menu bantuan dengan perintah /bantuan di grup atau di sini.")
 
 @app.on_message(filters.command("main") & filters.group)
 async def mulai_handler(client, message):
