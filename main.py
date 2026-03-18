@@ -238,8 +238,8 @@ async def bakkata_engine(client, message):
         current_q = game["q_score"]
         gelar = get_bakkata_tier(current_q)
         
-        # 2. Update poin permanen di DB buat /top
-        await update_point(user_id, 10)
+        # Ganti baris update_point lama jadi ini:
+        await update_point(user_id, 10, q_score=current_q, gelar=gelar)
         
         # 3. Tentukan panjang kata otomatis berdasarkan (Q)
         if current_q <= 20: new_len = 4
@@ -324,10 +324,17 @@ async def ganti_cmd(client, message):
     
 @app.on_message(filters.command("top"))
 async def top_cmd(client, message):
+    # Ambil 10 besar berdasarkan Poin
     top_10 = await users.find().sort("point", -1).limit(10).to_list(10)
-    text = "🏆 **TOP SCORE BAKKATA**\n\n"
+    text = "🏆 TOP SCORE BAKKATA\n\n"
+    
     for i, u in enumerate(top_10, 1):
-        text += f"{i}. {u.get('name', 'User')} — `{u.get('point', 0)} pts`\n"
+        nama = u.get('name', 'User')
+        poin = u.get('point', 0)
+        rekor_gelar = u.get('high_gelar', '🟢 Easy') # Gelar tertinggi dia
+        
+        text += f"{i}. {rekor_gelar} | {nama} — `{poin} pts`\n"
+        
     buttons = InlineKeyboardMarkup([[InlineKeyboardButton("📊 Cek Score Saya", callback_data="my_score")]])
     await message.reply(text, reply_markup=buttons)
 
@@ -392,9 +399,21 @@ async def manage_user_cb(client, callback_query):
 @app.on_callback_query(filters.regex("my_score"))
 async def my_score_callback(client, callback_query):
     u = await users.find_one({"_id": callback_query.from_user.id})
-    score = u.get("point", 0) if u else 0
-    await callback_query.answer(f"Skor lu: {score} pts", show_alert=True)
-
+    if not u: return await callback_query.answer("Belum ada data!")
+    
+    poin = u.get("point", 0)
+    hq = u.get("high_q", 0)
+    hg = u.get("high_gelar", "Belum Ada")
+    
+    pesan = (
+        f"📊 STATISTIK LU\n\n"
+        f"💎 Total Poin: `{poin} pts`\n"
+        f"🔥 High Score (Q): `{hq}`\n"
+        f"🏆 Gelar Tertinggi: **{hg}**"
+    )
+    
+    await callback_query.message.reply(pesan)
+    await callback_query.answer()
 @app.on_callback_query(filters.regex(r"^(join_suit|pilih_suit_)"))
 async def suit_callback(client, callback_query):
     data = callback_query.data
