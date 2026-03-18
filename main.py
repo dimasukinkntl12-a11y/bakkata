@@ -1030,15 +1030,19 @@ async def handle_pilihan_suit(client, callback_query):
             )
 
         # HANDLE PINDAH POIN (TARUHAN)
+        # --- LOGIC PINDAH POIN (PAS ADA PEMENANG) ---
         bet = game.get("bet_amount", 0)
         is_bet = game.get("is_bet", False)
         
+        # Ambil data User biar bisa di-mention
         win_user = await client.get_users(winner)
         lose_user = await client.get_users(loser)
 
         if is_bet:
-            await update_point(winner, bet)
-            await update_point(loser, -bet)
+            # DI SINI KUNCINYA, YAN!
+            await update_point(winner, bet)    # Pemenang nambah
+            await update_point(loser, -bet)    # Pecundang ngurang
+            
             res_text = (
                 f"🎉 **{win_user.mention} MENANG TARUHAN!**\n"
                 f"🎮 `{move1.upper()}` vs `{move2.upper()}`\n\n"
@@ -1046,13 +1050,13 @@ async def handle_pilihan_suit(client, callback_query):
                 f"📉 {lose_user.mention}: `-{bet}` pts"
             )
         else:
-            # Game biasa (bonus kecil)
+            # Kalau main biasa (bukan taruhan) cuma dapet 10 pts
             await update_point(winner, 10)
             res_text = f"🎉 **{win_user.mention} Menang!**\n🎮 `{move1.upper()}` vs `{move2.upper()}`\n(+10 pts)"
 
         del active_games[cid]
         await callback_query.message.edit_text(res_text)
-
+        
 async def main():
     await app.start()
     from database import db
